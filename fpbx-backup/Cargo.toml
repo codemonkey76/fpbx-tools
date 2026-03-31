@@ -1,0 +1,16 @@
+[package]
+name = "fpbx-backup"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+crossterm.workspace = true
+dirs.workspace = true
+fpbx-core = { version = "0.1.0", path = "../fpbx-core" }
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

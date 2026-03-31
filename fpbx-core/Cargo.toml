@@ -1,0 +1,18 @@
+[package]
+name = "fpbx-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+flate2.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ssh2.workspace = true
+tar.workspace = true
+tracing.workspace = true
+uuid.workspace = true
