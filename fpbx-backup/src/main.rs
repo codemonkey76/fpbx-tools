@@ -49,6 +49,7 @@ fn main() -> Result<()> {
                 if key.code == KeyCode::Char('q')
                     && key.modifiers == KeyModifiers::NONE
                     && !app.is_running_task()
+                    && !app.is_typing()
                 {
                     break;
                 }
@@ -75,8 +76,8 @@ fn main() -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    // Print bundle path if successful.
-    if let Some(path) = app.completed_bundle_path() {
+    // Print bundle paths if successful.
+    for path in app.bundle_paths() {
         println!("\nBackup complete: {}", path.display());
     }
 

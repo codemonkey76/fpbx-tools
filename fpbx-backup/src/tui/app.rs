@@ -8,7 +8,7 @@ use fpbx_core::{
 };
 use std::{
     path::PathBuf,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     thread,
 };
@@ -32,7 +32,7 @@ pub struct WorkerState {
     pub current_task: String,
     pub done: bool,
     pub error: Option<String>,
-    pub bundle_path: Option<PathBuf>,
+    pub bundle_paths: Vec<PathBuf>,
     pub verify_result: Option<VerifyResult>,
 }
 
@@ -60,11 +60,14 @@ pub struct App {
     // Output path screen.
     pub output_path_input: String,
 
+    // Domain multi-selection.
+    pub selected_domain_uuids: HashSet<String>,
+
     // Progress screen.
     pub worker: Option<Arc<Mutex<WorkerState>>>,
 
     // Done.
-    pub bundle_path: Option<PathBuf>,
+    pub bundle_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,8 +98,9 @@ impl App {
             output_path_input: default_backup_dir()
                 .to_string_lossy()
                 .to_string(),
+            selected_domain_uuids: HashSet::new(),
             worker: None,
-            bundle_path: None,
+            bundle_paths: Vec::new(),
         }
     }
 
@@ -109,8 +113,13 @@ impl App {
                 .unwrap_or(false)
     }
 
-    pub fn completed_bundle_path(&self) -> Option<&PathBuf> {
-        self.bundle_path.as_ref()
+    pub fn is_typing(&self) -> bool {
+        matches!(self.screen, AppScreen::Server | AppScreen::OutputPath)
+            || (self.screen == AppScreen::Domains && self.filter_active)
+    }
+
+    pub fn bundle_paths(&self) -> &[PathBuf] {
+        &self.bundle_paths
     }
 
     pub fn filtered_domains(&self) -> Vec<&FpbxDomain> {
@@ -121,11 +130,11 @@ impl App {
             .collect()
     }
 
-    pub fn selected_domain(&self) -> Option<&FpbxDomain> {
-        let filtered = self.filtered_domains();
-        self.domain_list_state
-            .selected()
-            .and_then(|i| filtered.get(i).copied())
+    pub fn selected_domains(&self) -> Vec<&FpbxDomain> {
+        self.domains
+            .iter()
+            .filter(|d| self.selected_domain_uuids.contains(&d.domain_uuid))
+            .collect()
     }
 
     /// Called every ~100ms tick.
@@ -153,8 +162,8 @@ impl App {
                 if state.done {
                     if let Some(ref err) = state.error {
                         self.screen = AppScreen::Error(err.clone());
-                    } else if let Some(ref p) = state.bundle_path {
-                        self.bundle_path = Some(p.clone());
+                    } else {
+                        self.bundle_paths = state.bundle_paths.clone();
                         self.screen = AppScreen::Done;
                     }
                 }
@@ -323,7 +332,6 @@ impl App {
                 }
                 KeyCode::Char(c) => {
                     self.domain_filter.push(c);
-                    // Reset selection when filter changes.
                     self.domain_list_state.select(Some(0));
                 }
                 _ => {}
@@ -348,8 +356,38 @@ impl App {
                 self.domain_list_state
                     .select(Some((i + 1).min(n.saturating_sub(1))));
             }
+            KeyCode::Char(' ') => {
+                let i = self.domain_list_state.selected().unwrap_or(0);
+                if let Some(d) = self.filtered_domains().get(i).copied() {
+                    let uuid = d.domain_uuid.clone();
+                    if self.selected_domain_uuids.contains(&uuid) {
+                        self.selected_domain_uuids.remove(&uuid);
+                    } else {
+                        self.selected_domain_uuids.insert(uuid);
+                    }
+                }
+            }
+            KeyCode::Char('a') => {
+                let uuids: Vec<String> = self
+                    .filtered_domains()
+                    .iter()
+                    .map(|d| d.domain_uuid.clone())
+                    .collect();
+                let all_selected = uuids
+                    .iter()
+                    .all(|u| self.selected_domain_uuids.contains(u));
+                if all_selected {
+                    for u in &uuids {
+                        self.selected_domain_uuids.remove(u);
+                    }
+                } else {
+                    for u in uuids {
+                        self.selected_domain_uuids.insert(u);
+                    }
+                }
+            }
             KeyCode::Enter => {
-                if self.selected_domain().is_some() {
+                if !self.selected_domain_uuids.is_empty() {
                     self.screen = AppScreen::OutputPath;
                 }
             }
@@ -386,7 +424,7 @@ impl App {
     fn start_backup(&mut self) {
         let host = self.resolved_host();
         let user = self.user_input.trim().to_string();
-        let domain = self.selected_domain().cloned().unwrap();
+        let domains = self.selected_domains().into_iter().cloned().collect::<Vec<_>>();
         let output_dir = PathBuf::from(self.output_path_input.trim());
 
         let wstate = Arc::new(Mutex::new(WorkerState::default()));
@@ -395,29 +433,40 @@ impl App {
         self.screen = AppScreen::Progress;
 
         thread::spawn(move || {
-            let log = |msg: &str| {
-                let mut w = wstate2.lock().unwrap();
-                w.log.push(msg.to_string());
-                w.current_task = msg.to_string();
-            };
-
-            let mut progress = |msg: &str| log(msg);
-
-            let result = run_backup(host, user, domain, output_dir, &mut progress);
-
-            let mut w = wstate2.lock().unwrap();
-            match result {
-                Ok(path) => {
-                    w.log.push(format!("✓ Bundle saved: {}", path.display()));
-                    w.bundle_path = Some(path);
-                    w.progress = 1.0;
-                    w.done = true;
+            let n = domains.len();
+            for (idx, domain) in domains.into_iter().enumerate() {
+                {
+                    let mut w = wstate2.lock().unwrap();
+                    w.progress = idx as f64 / n as f64;
+                    w.log.push(format!("--- {} ({}/{}) ---", domain.domain_name, idx + 1, n));
+                    w.current_task = format!("Backing up {}…", domain.domain_name);
                 }
-                Err(e) => {
-                    w.error = Some(e.to_string());
-                    w.done = true;
+
+                let ws = wstate2.clone();
+                let mut progress = move |msg: &str| {
+                    let mut w = ws.lock().unwrap();
+                    w.log.push(msg.to_string());
+                    w.current_task = msg.to_string();
+                };
+
+                match run_backup(host.clone(), user.clone(), domain, output_dir.clone(), &mut progress) {
+                    Ok(path) => {
+                        let mut w = wstate2.lock().unwrap();
+                        w.log.push(format!("✓ Bundle saved: {}", path.display()));
+                        w.bundle_paths.push(path);
+                    }
+                    Err(e) => {
+                        let mut w = wstate2.lock().unwrap();
+                        w.error = Some(e.to_string());
+                        w.done = true;
+                        return;
+                    }
                 }
             }
+
+            let mut w = wstate2.lock().unwrap();
+            w.progress = 1.0;
+            w.done = true;
         });
     }
 }

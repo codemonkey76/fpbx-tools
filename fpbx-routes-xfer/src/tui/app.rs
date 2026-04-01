@@ -154,6 +154,10 @@ impl App {
                 .unwrap_or(false)
     }
 
+    pub fn is_typing(&self) -> bool {
+        matches!(self.screen, AppScreen::Source | AppScreen::Dest)
+    }
+
     pub fn resolved_src_host(&self) -> String {
         let key = self.src_host_input.trim().to_lowercase();
         self.ssh_hosts

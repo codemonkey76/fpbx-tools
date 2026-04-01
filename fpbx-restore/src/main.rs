@@ -43,6 +43,7 @@ fn main() -> Result<()> {
                 if key.code == KeyCode::Char('q')
                     && key.modifiers == KeyModifiers::NONE
                     && !app.is_running_task()
+                    && !app.is_typing()
                 {
                     break;
                 }

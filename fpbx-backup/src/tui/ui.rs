@@ -80,7 +80,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.screen {
         AppScreen::Server => " Tab switch field   Enter verify/continue   q quit",
-        AppScreen::Domains => " ↑↓/jk navigate   / filter   Enter select   Esc back   q quit",
+        AppScreen::Domains => " ↑↓/jk navigate   Space toggle   a select all   / filter   Enter continue   Esc back   q quit",
         AppScreen::OutputPath => " Enter start backup   Esc back",
         AppScreen::Progress => " (working…)",
         AppScreen::Done => " Enter/q quit",
@@ -199,15 +199,20 @@ fn draw_domains(f: &mut Frame, app: &mut App, area: Rect) {
         f.set_cursor_position((x, y));
     }
 
-    // Domain list.
+    // Domain list with checkboxes.
     let filtered = app.filtered_domains();
+    let selected_count = app.selected_domain_uuids.len();
     let items: Vec<ListItem> = filtered
         .iter()
         .map(|d| {
+            let checked = app.selected_domain_uuids.contains(&d.domain_uuid);
+            let check = if checked { "[✓] " } else { "[ ] " };
+            let check_color = if checked { OK } else { MUTED };
             let enabled_marker = if d.domain_enabled { "●" } else { "○" };
-            let color = if d.domain_enabled { OK } else { MUTED };
+            let enabled_color = if d.domain_enabled { OK } else { MUTED };
             ListItem::new(Line::from(vec![
-                Span::styled(format!(" {} ", enabled_marker), Style::default().fg(color)),
+                Span::styled(check, Style::default().fg(check_color)),
+                Span::styled(format!("{} ", enabled_marker), Style::default().fg(enabled_color)),
                 Span::styled(d.domain_name.clone(), Style::default().fg(TITLE)),
                 Span::styled(
                     d.domain_description
@@ -221,9 +226,11 @@ fn draw_domains(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let title = if app.loading_domains {
-        " Loading domains… "
+        " Loading domains… ".to_string()
+    } else if selected_count > 0 {
+        format!(" Domains ({} selected) ", selected_count)
     } else {
-        " Domains "
+        " Domains ".to_string()
     };
 
     let list = List::new(items)
@@ -261,8 +268,15 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     // Domain summary.
-    if let Some(d) = app.selected_domain() {
-        let summary = Paragraph::new(format!("Backing up:  {}", d.label()))
+    let selected = app.selected_domains();
+    if !selected.is_empty() {
+        let summary_text = if selected.len() == 1 {
+            format!("Backing up:  {}", selected[0].label())
+        } else {
+            let names: Vec<&str> = selected.iter().map(|d| d.domain_name.as_str()).collect();
+            format!("Backing up {} domains:  {}", selected.len(), names.join(", "))
+        };
+        let summary = Paragraph::new(summary_text)
             .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
         f.render_widget(summary, chunks[1]);
     }
@@ -272,7 +286,7 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT))
-        .title(Span::styled(" Save bundle to ", Style::default().fg(ACCENT)));
+        .title(Span::styled(" Save bundles to ", Style::default().fg(ACCENT)));
     let path_text = Paragraph::new(app.output_path_input.as_str())
         .block(path_block)
         .style(Style::default().fg(TITLE));
@@ -361,30 +375,26 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
         .margin(4)
         .split(area);
 
+    let n = app.bundle_paths.len();
+    let heading = if n == 1 {
+        "✓ Backup complete".to_string()
+    } else {
+        format!("✓ Backup complete ({} domains)", n)
+    };
+
     let mut lines = vec![
         Line::from(Span::styled(
-            "✓ Backup complete",
+            heading,
             Style::default().fg(OK).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
 
-    if let Some(path) = &app.bundle_path {
+    for path in &app.bundle_paths {
         lines.push(Line::from(vec![
             Span::styled("Bundle: ", Style::default().fg(MUTED)),
             Span::styled(path.display().to_string(), Style::default().fg(TITLE)),
         ]));
-    }
-
-    // Log summary.
-    if let Some(w) = &app.worker {
-        let w = w.lock().unwrap();
-        for msg in w.log.iter().filter(|m| m.starts_with('✓')) {
-            lines.push(Line::from(Span::styled(
-                msg.clone(),
-                Style::default().fg(OK),
-            )));
-        }
     }
 
     let summary = Paragraph::new(Text::from(lines))

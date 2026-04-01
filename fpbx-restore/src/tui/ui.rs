@@ -34,7 +34,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         AppScreen::Server => draw_server(f, app, chunks[1]),
         AppScreen::Confirm => draw_confirm(f, app, chunks[1]),
         AppScreen::Progress => draw_progress(f, app, chunks[1]),
-        AppScreen::Done => draw_done(f, chunks[1]),
+        AppScreen::Done => draw_done(f, app, chunks[1]),
         AppScreen::Error(msg) => {
             draw_picker(f, app, chunks[1]);
             draw_error(f, msg, area);
@@ -73,9 +73,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.screen {
-        AppScreen::BundlePicker => " ↑↓/jk navigate   Enter select   q quit",
+        AppScreen::BundlePicker => " ↑↓/jk navigate   Space toggle   a select all   Enter continue   q quit",
         AppScreen::Preview => " Enter continue   Esc back",
-        AppScreen::Server => " Tab switch field   Enter continue   Esc back",
+        AppScreen::Server => " Tab switch field   Enter verify/continue   Esc back",
         AppScreen::Confirm => " y/Enter confirm   n/Esc cancel",
         AppScreen::Progress => " (restoring…)",
         AppScreen::Done => " Enter/q quit",
@@ -85,6 +85,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_picker(f: &mut Frame, app: &mut App, area: Rect) {
+    let selected_count = app.selected_bundle_paths.len();
     let items: Vec<ListItem> = if app.bundles.is_empty() {
         vec![ListItem::new(Span::styled(
             format!(" No .fpbx bundles found in {}", app.bundle_dir.display()),
@@ -94,15 +95,25 @@ fn draw_picker(f: &mut Frame, app: &mut App, area: Rect) {
         app.bundles
             .iter()
             .map(|(path, m)| {
+                let checked = app.selected_bundle_paths.contains(path);
+                let check = if checked { "[✓] " } else { "[ ] " };
+                let check_color = if checked { OK } else { MUTED };
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
                 let date = m.created_at.format("%Y-%m-%d %H:%M").to_string();
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!(" {} ", m.domain.domain_name), Style::default().fg(TITLE).add_modifier(Modifier::BOLD)),
+                    Span::styled(check, Style::default().fg(check_color)),
+                    Span::styled(format!("{} ", m.domain.domain_name), Style::default().fg(TITLE).add_modifier(Modifier::BOLD)),
                     Span::styled(format!("  {}  ", date), Style::default().fg(MUTED)),
                     Span::styled(name, Style::default().fg(MUTED)),
                 ]))
             })
             .collect()
+    };
+
+    let title = if selected_count > 0 {
+        format!(" Select bundles ({} selected) ", selected_count)
+    } else {
+        " Select backup bundle ".to_string()
     };
 
     let list = List::new(items)
@@ -112,7 +123,7 @@ fn draw_picker(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(MUTED))
                 .title(Span::styled(
-                    " Select backup bundle ",
+                    title,
                     Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                 )),
         )
@@ -183,9 +194,11 @@ fn draw_server(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
-            Constraint::Length(3),
-            Constraint::Length(3),
+            Constraint::Length(2),  // spacing
+            Constraint::Length(3),  // host field
+            Constraint::Length(3),  // user field
+            Constraint::Length(2),  // spacing
+            Constraint::Length(3),  // verify status
             Constraint::Min(0),
         ])
         .margin(4)
@@ -207,6 +220,21 @@ fn draw_server(f: &mut Frame, app: &App, area: Rect) {
     if app.active_field == 1 {
         f.set_cursor_position((chunks[2].x + 1 + app.user_input.len() as u16, chunks[2].y + 1));
     }
+
+    // Verify status.
+    let status_widget = if app.verifying && app.worker.as_ref().map(|w| !w.lock().unwrap().done).unwrap_or(true) {
+        Paragraph::new("⟳ Verifying SSH + FusionPBX access…")
+            .style(Style::default().fg(Color::Yellow))
+    } else if let Some(Ok(v)) = &app.verify_result {
+        let color = if v.is_ok() { OK } else { ERR };
+        Paragraph::new(v.summary()).style(Style::default().fg(color))
+    } else if let Some(Err(e)) = &app.verify_result {
+        Paragraph::new(format!("✗ {}", e)).style(Style::default().fg(ERR))
+    } else {
+        Paragraph::new("Press Enter to verify").style(Style::default().fg(MUTED))
+    };
+
+    f.render_widget(status_widget, chunks[4]);
 }
 
 fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
@@ -220,7 +248,23 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled("Confirm restore", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))),
         Line::from(""),
     ];
-    if let Some(m) = &app.selected_manifest {
+    let selected = app.selected_bundles();
+    if selected.len() == 1 {
+        lines.push(Line::from(vec![
+            Span::styled("Domain:       ", Style::default().fg(MUTED)),
+            Span::styled(selected[0].1.domain.domain_name.clone(), Style::default().fg(TITLE)),
+        ]));
+    } else if !selected.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("Domains ({}):", selected.len()), Style::default().fg(MUTED)),
+        ]));
+        for (_, m) in &selected {
+            lines.push(Line::from(vec![
+                Span::styled("  • ", Style::default().fg(MUTED)),
+                Span::styled(m.domain.domain_name.clone(), Style::default().fg(TITLE)),
+            ]));
+        }
+    } else if let Some(m) = &app.selected_manifest {
         lines.push(Line::from(vec![
             Span::styled("Domain:       ", Style::default().fg(MUTED)),
             Span::styled(m.domain.domain_name.clone(), Style::default().fg(TITLE)),
@@ -300,17 +344,29 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn draw_done(f: &mut Frame, area: Rect) {
+fn draw_done(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Length(6), Constraint::Min(0)])
+        .constraints([Constraint::Length(2), Constraint::Min(6), Constraint::Min(0)])
         .margin(4)
         .split(area);
 
+    let n = app.selected_bundles().len().max(1);
+    let heading = if n == 1 {
+        "✓ Restore complete".to_string()
+    } else {
+        format!("✓ Restore complete ({} domains)", n)
+    };
+    let body = if n == 1 {
+        "Domain has been restored to the destination server.".to_string()
+    } else {
+        format!("{} domains have been restored to the destination server.", n)
+    };
+
     let lines = vec![
-        Line::from(Span::styled("✓ Restore complete", Style::default().fg(OK).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(heading, Style::default().fg(OK).add_modifier(Modifier::BOLD))),
         Line::from(""),
-        Line::from(Span::styled("Domain has been restored to the destination server.", Style::default().fg(TITLE))),
+        Line::from(Span::styled(body, Style::default().fg(TITLE))),
         Line::from(""),
         Line::from(Span::styled("Press Enter or q to exit.", Style::default().fg(MUTED))),
     ];
