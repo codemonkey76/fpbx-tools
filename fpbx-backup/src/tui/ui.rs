@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
@@ -15,7 +15,6 @@ const MUTED: Color = Color::DarkGray;
 const OK: Color = Color::Green;
 const ERR: Color = Color::Red;
 const TITLE: Color = Color::White;
-const STEPS: usize = 5;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();

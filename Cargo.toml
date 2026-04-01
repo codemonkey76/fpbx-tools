@@ -2,7 +2,7 @@
 members = [
   "fpbx-core",
   "fpbx-backup",
-  "fpbx-restore",
+  "fpbx-restore", "fpbx-info",
 ]
 resolver = "2"
 

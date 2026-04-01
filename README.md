@@ -5,6 +5,7 @@ A pair of interactive terminal tools for backing up and restoring FusionPBX doma
 ```
 fpbx-backup   →   pick server   →   pick domain   →   .fpbx bundle
 fpbx-restore  →   pick bundle   →   pick server   →   restored domain
+fpbx-info     →   list bundles or inspect a single .fpbx file
 ```
 
 ---
@@ -17,6 +18,7 @@ fpbx-restore  →   pick bundle   →   pick server   →   restored domain
 - **Non-destructive by default** — the source server is never modified; backups are pure read operations
 - **Domain-scoped exports** — only the selected domain's records are exported (extensions, dialplans, ring groups, IVRs, voicemails, recordings, gateways, contacts, and more)
 - **Integrity verification** — the bundle checksum is validated before any restore begins
+- **Bundle inspection** — `fpbx-info` lists all local bundles or shows full manifest details for a specific `.fpbx` file
 - **Structured logging** — all operations are logged to `~/.fpbx/backup.log` / `restore.log` without cluttering the TUI
 
 ---
@@ -45,12 +47,13 @@ The compiled binaries will be at:
 ```
 target/release/fpbx-backup
 target/release/fpbx-restore
+target/release/fpbx-info
 ```
 
 Copy them to somewhere on your `$PATH`, e.g.:
 
 ```bash
-sudo cp target/release/fpbx-backup target/release/fpbx-restore /usr/local/bin/
+sudo cp target/release/fpbx-backup target/release/fpbx-restore target/release/fpbx-info /usr/local/bin/
 ```
 
 ---
@@ -80,6 +83,20 @@ The resulting file is named `<domain>-<YYYYMMDD-HHMMSS>.fpbx` and saved in the c
 ```bash
 fpbx-restore
 ```
+
+---
+
+### Inspect bundles
+
+```bash
+# List all bundles in ~/.fpbx/backups/
+fpbx-info
+
+# Show full details for a specific bundle
+fpbx-info path/to/bundle.fpbx
+```
+
+The output includes domain name, UUID, source host, creation date, table row counts, backed-up file paths, and DB/file sizes. The checksum is verified automatically — if `open_bundle` succeeds the bundle is valid.
 
 | Step        | What happens                                                                     |
 | ----------- | -------------------------------------------------------------------------------- |
@@ -146,20 +163,23 @@ fpbx-tools/
 │       ├── db.rs               # pg_dump export and psql import over SSH
 │       ├── bundle.rs           # .fpbx archive create/open/verify
 │       └── verify.rs           # post-restore row count diffing
-├── fpbx-backup/                # backup binary
+├── fpbx-backup/                # backup binary (TUI)
 │   └── src/
 │       ├── main.rs
 │       └── tui/
 │           ├── app.rs          # state machine + background worker
 │           ├── ui.rs           # Ratatui draw functions
 │           └── widgets.rs      # shared widget helpers
-└── fpbx-restore/               # restore binary
+├── fpbx-restore/               # restore binary (TUI)
+│   └── src/
+│       ├── main.rs
+│       └── tui/
+│           ├── app.rs
+│           ├── ui.rs
+│           └── widgets.rs
+└── fpbx-info/                  # bundle inspection CLI
     └── src/
-        ├── main.rs
-        └── tui/
-            ├── app.rs
-            ├── ui.rs
-            └── widgets.rs
+        └── main.rs             # list bundles or show manifest details
 ```
 
 ---

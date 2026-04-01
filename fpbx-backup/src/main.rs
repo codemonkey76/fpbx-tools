@@ -13,7 +13,7 @@ use std::{
 };
 use tracing_subscriber::EnvFilter;
 
-use tui::{app::App, app::AppScreen};
+use tui::app::App;
 
 fn main() -> Result<()> {
     // File-only logging so it doesn't interfere with TUI.

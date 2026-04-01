@@ -10,7 +10,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, time::{Duration, Instant}};
 use tracing_subscriber::EnvFilter;
 
-use tui::{app::App, app::AppScreen};
+use tui::app::App;
 
 fn main() -> Result<()> {
     let log_path = dirs::home_dir()

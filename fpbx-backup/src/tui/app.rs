@@ -8,6 +8,7 @@ use fpbx_core::{
 };
 use std::{
     path::PathBuf,
+    collections::HashMap,
     sync::{Arc, Mutex},
     thread,
 };
@@ -32,11 +33,15 @@ pub struct WorkerState {
     pub done: bool,
     pub error: Option<String>,
     pub bundle_path: Option<PathBuf>,
+    pub verify_result: Option<VerifyResult>,
 }
 
 pub struct App {
     pub screen: AppScreen,
     pub should_quit: bool,
+
+    // SSH config aliases.
+    pub ssh_hosts: HashMap<String, SshHostEntry>,
 
     // Server screen.
     pub host_input: String,
@@ -60,18 +65,25 @@ pub struct App {
 
     // Done.
     pub bundle_path: Option<PathBuf>,
-    pub manifest: Option<BundleManifest>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshHostEntry {
+    pub hostname: String,
+    pub user: String,
 }
 
 impl App {
     pub fn new() -> Self {
         let mut list_state = ratatui::widgets::ListState::default();
         list_state.select(Some(0));
+        let ssh_hosts = parse_ssh_config();
         Self {
             screen: AppScreen::Server,
             should_quit: false,
+            ssh_hosts,
             host_input: String::new(),
-            user_input: whoami_user(),
+            user_input: String::new(),
             active_field: 0,
             verify_result: None,
             verifying: false,
@@ -85,7 +97,6 @@ impl App {
                 .to_string(),
             worker: None,
             bundle_path: None,
-            manifest: None,
         }
     }
 
@@ -119,6 +130,22 @@ impl App {
 
     /// Called every ~100ms tick.
     pub fn tick(&mut self) {
+        // Poll verify worker on Server screen.
+        if self.screen == AppScreen::Server && self.verifying {
+            if let Some(w) = &self.worker {
+                let state = w.lock().unwrap();
+                if state.done {
+                    if let Some(ref v) = state.verify_result {
+                        self.verify_result = Some(Ok(v.clone()));
+                        self.verifying = false;
+                    } else if let Some(ref err) = state.error {
+                        self.verify_result = Some(Err(err.clone()));
+                        self.verifying = false;
+                    }
+                }
+            }
+        }
+
         // Poll worker for completion.
         if self.screen == AppScreen::Progress {
             if let Some(w) = &self.worker {
@@ -165,6 +192,7 @@ impl App {
             KeyCode::Char(c) => {
                 if self.active_field == 0 {
                     self.host_input.push(c);
+                    self.apply_ssh_config_lookup();
                 } else {
                     self.user_input.push(c);
                 }
@@ -173,6 +201,7 @@ impl App {
             KeyCode::Backspace => {
                 if self.active_field == 0 {
                     self.host_input.pop();
+                    self.apply_ssh_config_lookup();
                 } else {
                     self.user_input.pop();
                 }
@@ -197,45 +226,35 @@ impl App {
         }
     }
 
+    fn apply_ssh_config_lookup(&mut self) {
+        let key = self.host_input.trim().to_lowercase();
+        if let Some(entry) = self.ssh_hosts.get(&key) {
+            self.user_input = entry.user.clone();
+        }
+    }
+
+    /// Resolved hostname - uses HostName from ssh config if availabble, else raw input.
+    pub fn resolved_host(&self) -> String {
+        let key = self.host_input.trim().to_lowercase();
+        self.ssh_hosts.get(&key).map(|e| e.hostname.clone())
+        .unwrap_or_else(|| self.host_input.trim().to_string())
+    }
+
     fn start_verify(&mut self) {
         self.verifying = true;
         self.verify_result = None;
-        let host = self.host_input.trim().to_string();
+        let host = self.resolved_host();
         let user = self.user_input.trim().to_string();
-        let worker: Arc<Mutex<Option<Result<VerifyResult, String>>>> =
-            Arc::new(Mutex::new(None));
-        let worker_clone = worker.clone();
-        thread::spawn(move || {
-            let result = SshSession::connect(&host, &user)
-                .and_then(|s| s.verify_fusionpbx());
-            *worker_clone.lock().unwrap() = Some(result.map_err(|e| e.to_string()));
-        });
-        // Poll via tick — we stash the join handle-equivalent in a thread.
-        // Use a simpler approach: spin up a thread that writes to a shared slot.
-        let result_slot: Arc<Mutex<Option<Result<VerifyResult, String>>>> = worker;
-        let host2 = self.host_input.trim().to_string();
-        let user2 = self.user_input.trim().to_string();
-        // Restart with a proper approach using a dedicated slot.
-        self.start_verify_inner(host2, user2);
-    }
-
-    fn start_verify_inner(&mut self, host: String, user: String) {
-        self.verifying = true;
         let slot: Arc<Mutex<Option<Result<VerifyResult, String>>>> =
-            Arc::new(Mutex::new(None));
+        Arc::new(Mutex::new(None));
         let slot2 = slot.clone();
+        let slot3 = slot.clone();
         thread::spawn(move || {
             let r = SshSession::connect(&host, &user)
-                .and_then(|s| s.verify_fusionpbx())
-                .map_err(|e| e.to_string());
+                .and_then(|s: SshSession| s.verify_fusionpbx())
+                .map_err(|e: anyhow::Error| e.to_string());
             *slot2.lock().unwrap() = Some(r);
         });
-        // We'll poll this in a busy-check on tick.
-        // Store slot in a way tick() can reach it:
-        let slot3 = slot.clone();
-        // Ugly but straightforward: spawn another thread to deliver result.
-        let app_ptr = std::ptr::null_mut::<App>(); // won't use
-        // Instead: store in worker field with a wrapper.
         let wstate = Arc::new(Mutex::new(WorkerState::default()));
         let wstate2 = wstate.clone();
         self.worker = Some(wstate);
@@ -244,28 +263,19 @@ impl App {
                 if let Some(r) = slot3.lock().unwrap().take() {
                     let mut w = wstate2.lock().unwrap();
                     match r {
-                        Ok(v) => {
-                            w.log.push(v.summary());
-                            w.done = true;
-                            // We signal verify completion via log.
-                        }
-                        Err(e) => {
-                            w.error = Some(e);
-                            w.done = true;
-                        }
+                        Ok(v) => { w.log.push(v.summary()); w.verify_result = Some(v); w.done = true; }
+                        Err(e) => { w.error = Some(e); w.done = true; }
                     }
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         });
-        // NOTE: verification result is stored in worker for now.
-        // tick() will detect worker.done and update verify_result.
     }
 
     fn advance_to_domains(&mut self) {
         self.loading_domains = true;
-        let host = self.host_input.trim().to_string();
+        let host = self.resolved_host();
         let user = self.user_input.trim().to_string();
         let slot: Arc<Mutex<Option<Result<Vec<FpbxDomain>, String>>>> =
             Arc::new(Mutex::new(None));
@@ -374,7 +384,7 @@ impl App {
     // --- Backup worker ---
 
     fn start_backup(&mut self) {
-        let host = self.host_input.trim().to_string();
+        let host = self.resolved_host();
         let user = self.user_input.trim().to_string();
         let domain = self.selected_domain().cloned().unwrap();
         let output_dir = PathBuf::from(self.output_path_input.trim());
@@ -495,8 +505,51 @@ fn export_domain_files(
     Ok(bytes)
 }
 
-fn whoami_user() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "root".to_string())
+fn parse_ssh_config() -> HashMap<String, SshHostEntry> {
+    let mut map = HashMap::new();
+    let config_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".ssh")
+        .join("config");
+    let Ok(content) = std::fs::read_to_string(&config_path) else {
+        return map;
+    };
+    let mut current_alias: Option<String> = None;
+    let mut current_hostname: Option<String> = None;
+    let mut current_user: Option<String> = None;
+
+    let flush = |map: &mut HashMap<String, SshHostEntry>,
+alias: &mut Option<String>,
+hostname: &mut Option<String>,
+user: &mut Option<String>| {
+        if let (Some(a), Some(h), Some(u)) = (alias.take(), hostname.take(), user.take()) {
+            map.insert(a.to_lowercase(), SshHostEntry { hostname: h, user: u });
+        }
+    };
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, val) = match line.split_once(|c: char| c.is_whitespace()) {
+            Some(pair) => (pair.0.to_lowercase(), pair.1.trim().to_string()),
+            None => continue,
+        };
+        match key.as_str() {
+            "host" => {
+                flush(&mut map, &mut current_alias, &mut current_hostname, &mut current_user);
+                // Skip wildcard entries.
+                if !val.contains('*') {
+                    current_alias = Some(val);
+                }
+            }
+            "hostname" => { current_hostname = Some(val); }
+            "user" => { current_user = Some(val); }
+            _ => {}
+        }
+    }
+    flush(&mut map, &mut current_alias, &mut current_hostname, &mut current_user);
+    map
 }
+

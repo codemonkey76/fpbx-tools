@@ -1,1 +1,11 @@
 target/
+
+# Loose bundle artifacts (test extractions, etc.)
+*.fpbx
+checksum.sha256
+db.sql.gz
+files.tar.gz
+manifest.json
+
+# Misc
+wl-copy
