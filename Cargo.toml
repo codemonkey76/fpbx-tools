@@ -2,7 +2,9 @@
 members = [
   "fpbx-core",
   "fpbx-backup",
-  "fpbx-restore", "fpbx-info",
+  "fpbx-restore",
+  "fpbx-info",
+  "fpbx-routes-xfer",
 ]
 resolver = "2"
 
@@ -24,4 +26,3 @@ tokio = { version = "1.50.0", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.23.0", features = ["serde"] }
-

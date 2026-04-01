@@ -14,6 +14,7 @@ A set of interactive terminal tools for backing up and restoring FusionPBX domai
 | `fpbx-backup` | binary | TUI: connect → pick domain → export → `.fpbx` bundle |
 | `fpbx-restore` | binary | TUI: pick bundle → connect → import SQL + files |
 | `fpbx-info` | binary | CLI: list bundles or inspect a single `.fpbx` file |
+| `fpbx-routes-xfer` | binary | TUI: copy global outbound routes between servers with gateway remapping |
 
 ---
 
@@ -72,8 +73,14 @@ fpbx-tools/
 │       ├── app.rs          # restore App state machine
 │       ├── ui.rs
 │       └── mod.rs
-└── fpbx-info/src/
-    └── main.rs             # no TUI; plain stdout with colored crate
+├── fpbx-info/src/
+│   └── main.rs             # no TUI; plain stdout with colored crate
+└── fpbx-routes-xfer/src/
+    ├── main.rs             # terminal setup/teardown, event loop
+    └── tui/
+        ├── app.rs          # state machine, route/gateway fetch, transfer worker
+        ├── ui.rs           # Ratatui draw functions
+        └── mod.rs
 ```
 
 ---

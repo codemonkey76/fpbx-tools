@@ -583,6 +583,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fpbx-routes-xfer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crossterm",
+ "dirs",
+ "fpbx-core",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

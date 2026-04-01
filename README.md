@@ -1,11 +1,12 @@
 # fpbx-tools
 
-A pair of interactive terminal tools for backing up and restoring FusionPBX domains across servers. Built in Rust with a full Ratatui TUI — no config files required, just SSH key access.
+A collection of interactive terminal tools for managing FusionPBX servers. Built in Rust with a full Ratatui TUI — no config files required, just SSH key access.
 
 ```
-fpbx-backup   →   pick server   →   pick domain   →   .fpbx bundle
-fpbx-restore  →   pick bundle   →   pick server   →   restored domain
-fpbx-info     →   list bundles or inspect a single .fpbx file
+fpbx-backup       →   pick server   →   pick domain      →   .fpbx bundle
+fpbx-restore      →   pick bundle   →   pick server      →   restored domain
+fpbx-info         →   list bundles or inspect a single .fpbx file
+fpbx-routes-xfer  →   pick routes   →   map gateways     →   copy to dest server
 ```
 
 ---
@@ -19,7 +20,8 @@ fpbx-info     →   list bundles or inspect a single .fpbx file
 - **Domain-scoped exports** — only the selected domain's records are exported (extensions, dialplans, ring groups, IVRs, voicemails, recordings, gateways, contacts, and more)
 - **Integrity verification** — the bundle checksum is validated before any restore begins
 - **Bundle inspection** — `fpbx-info` lists all local bundles or shows full manifest details for a specific `.fpbx` file
-- **Structured logging** — all operations are logged to `~/.fpbx/backup.log` / `restore.log` without cluttering the TUI
+- **Route transfer** — `fpbx-routes-xfer` copies global outbound routes between servers with interactive gateway UUID remapping
+- **Structured logging** — all operations are logged to `~/.fpbx/backup.log` / `restore.log` / `routes-xfer.log` without cluttering the TUI
 
 ---
 
@@ -53,7 +55,7 @@ target/release/fpbx-info
 Copy them to somewhere on your `$PATH`, e.g.:
 
 ```bash
-sudo cp target/release/fpbx-backup target/release/fpbx-restore target/release/fpbx-info /usr/local/bin/
+sudo cp target/release/fpbx-backup target/release/fpbx-restore target/release/fpbx-info target/release/fpbx-routes-xfer /usr/local/bin/
 ```
 
 ---
@@ -97,6 +99,25 @@ fpbx-info path/to/bundle.fpbx
 ```
 
 The output includes domain name, UUID, source host, creation date, table row counts, backed-up file paths, and DB/file sizes. The checksum is verified automatically — if `open_bundle` succeeds the bundle is valid.
+
+---
+
+### Transfer outbound routes
+
+```bash
+fpbx-routes-xfer
+```
+
+| Step | What happens |
+| --- | --- |
+| **Source** | Enter the source host and SSH user, verify connectivity |
+| **Routes** | Browse the server's global outbound dialplans; toggle selection with Space, select all/none with `a`/`n` |
+| **Dest** | Enter the destination host and SSH user, verify connectivity |
+| **Gateways** | Map each gateway referenced in the selected routes to a gateway on the destination server (auto-matched by name where possible; press `s` to skip) |
+| **Confirm** | Review the transfer and press `y` to proceed |
+| **Running** | Routes and their dialplan details are inserted on the destination; bridge actions are rewritten with the remapped gateway UUIDs; FusionPBX XML is reloaded |
+
+Existing routes with the same name in the global context are replaced before inserting.
 
 | Step        | What happens                                                                     |
 | ----------- | -------------------------------------------------------------------------------- |
@@ -177,9 +198,16 @@ fpbx-tools/
 │           ├── app.rs
 │           ├── ui.rs
 │           └── widgets.rs
-└── fpbx-info/                  # bundle inspection CLI
+├── fpbx-info/                  # bundle inspection CLI
+│   └── src/
+│       └── main.rs             # list bundles or show manifest details
+└── fpbx-routes-xfer/           # outbound route transfer binary (TUI)
     └── src/
-        └── main.rs             # list bundles or show manifest details
+        ├── main.rs
+        └── tui/
+            ├── app.rs          # state machine, route/gateway fetch, transfer worker
+            ├── ui.rs           # Ratatui draw functions
+            └── mod.rs
 ```
 
 ---
