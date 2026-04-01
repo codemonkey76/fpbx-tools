@@ -2,8 +2,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use fpbx_core::ssh::SshSession;
 use std::{
-    Collections::HashMap,
-    path::PathBuf,
+    collections::HashMap,
     sync::{Arc, Mutex},
     thread,
 };
@@ -23,6 +22,7 @@ pub enum AppScreen {
 #[derive(Debug, Clone)]
 pub struct OutboundRoute {
     pub dialplan_uuid: String,
+    pub app_uuid: String,
     pub dialplan_name: String,
     pub dialplan_description: String,
     pub dialplan_order: String,
@@ -61,19 +61,20 @@ pub struct GatewayMapping {
 impl GatewayMapping {
     pub fn resolved_dest_uuid(&self) -> Option<&str> {
         self.selected_idx
-        .and_then(|i| self.dest_options.get(i))
+            .and_then(|i| self.dest_options.get(i))
             .map(|g| g.uuid.as_str())
     }
 }
 
 #[derive(Debug, Default)]
 pub struct WorkerState {
-    pub log: Vec<String>
+    pub log: Vec<String>,
     pub progress: f64,
     pub current_task: String,
     pub done: bool,
     pub error: Option<String>,
 }
+
 #[derive(Debug, Clone)]
 pub struct SshHostEntry {
     pub hostname: String,
@@ -91,7 +92,6 @@ pub struct App {
     pub src_host_input: String,
     pub src_user_input: String,
     pub src_active_field: usize,
-    pub src_verified: bool,
     pub src_verifying: bool,
     pub src_verify_msg: Option<String>,
     pub src_verify_ok: bool,
@@ -100,7 +100,6 @@ pub struct App {
     pub dst_host_input: String,
     pub dst_user_input: String,
     pub dst_active_field: usize,
-    pub dst_verified: bool,
     pub dst_verifying: bool,
     pub dst_verify_msg: Option<String>,
     pub dst_verify_ok: bool,
@@ -128,14 +127,12 @@ impl App {
             src_host_input: String::new(),
             src_user_input: String::new(),
             src_active_field: 0,
-            src_verified: false,
             src_verifying: false,
             src_verify_msg: None,
             src_verify_ok: false,
             dst_host_input: String::new(),
             dst_user_input: String::new(),
             dst_active_field: 0,
-            dst_verified: false,
             dst_verifying: false,
             dst_verify_msg: None,
             dst_verify_ok: false,
@@ -150,21 +147,25 @@ impl App {
 
     pub fn is_running_task(&self) -> bool {
         self.screen == AppScreen::Progress
-            && self.worker.as_ref()
+            && self
+                .worker
+                .as_ref()
                 .map(|w| !w.lock().unwrap().done)
                 .unwrap_or(false)
     }
 
     pub fn resolved_src_host(&self) -> String {
         let key = self.src_host_input.trim().to_lowercase();
-        self.ssh_hosts.get(&key)
+        self.ssh_hosts
+            .get(&key)
             .map(|e| e.hostname.clone())
             .unwrap_or_else(|| self.src_host_input.trim().to_string())
     }
 
     pub fn resolved_dst_host(&self) -> String {
         let key = self.dst_host_input.trim().to_lowercase();
-        self.ssh_hosts.get(&key)
+        self.ssh_hosts
+            .get(&key)
             .map(|e| e.hostname.clone())
             .unwrap_or_else(|| self.dst_host_input.trim().to_string())
     }
@@ -183,57 +184,79 @@ impl App {
         }
     }
 
+    #[allow(dead_code)]
     pub fn selected_routes(&self) -> Vec<&OutboundRoute> {
         self.routes.iter().filter(|r| r.selected).collect()
     }
 
     pub fn tick(&mut self) {
-        // Poll verify workers.
+        // Poll source verify worker.
         if self.screen == AppScreen::Source && self.src_verifying {
-            if let Some(w) = &self.worker {
+            let result = if let Some(w) = &self.worker {
                 let state = w.lock().unwrap();
                 if state.done {
-                    if let Some(ref err) = state.error {
-                        self.src_verify_msg = Some(format!("✗ {}", err));
-                        self.src_verify_ok = false;
-                    } else if let Some(msg) = state.log.last() {
-                        self.src_verify_msg = Some(format!("✓ {}", msg));
-                        self.src_verify_ok = true;
-                    }
-                    self.src_verifying = false;
-                    self.worker = None;
+                    Some((state.error.clone(), state.log.last().cloned()))
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
+            if let Some((err, msg)) = result {
+                if let Some(e) = err {
+                    self.src_verify_msg = Some(format!("✗ {}", e));
+                    self.src_verify_ok = false;
+                } else if let Some(m) = msg {
+                    self.src_verify_msg = Some(format!("✓ {}", m));
+                    self.src_verify_ok = true;
+                }
+                self.src_verifying = false;
+                self.worker = None;
             }
         }
+
+        // Poll dest verify worker.
         if self.screen == AppScreen::Dest && self.dst_verifying {
-            if let Some(w) = &self.worker {
+            let result = if let Some(w) = &self.worker {
                 let state = w.lock().unwrap();
                 if state.done {
-                    if let Some(ref err) = state.error {
-                        self.dst_verify_msg = Some(format!("✗ {}", err));
-                        self.dst_verify_ok = false;
-                    } else if let Some(msg) = state.log.last() {
-                        self.dst_verify_msg = Some(format!("✓ {}", msg));
-                        self.dst_verify_ok = true;
-                    }
-                    self.dst_verifying = false;
-                    self.worker = None;
+                    Some((state.error.clone(), state.log.last().cloned()))
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
+            if let Some((err, msg)) = result {
+                if let Some(e) = err {
+                    self.dst_verify_msg = Some(format!("✗ {}", e));
+                    self.dst_verify_ok = false;
+                } else if let Some(m) = msg {
+                    self.dst_verify_msg = Some(format!("✓ {}", m));
+                    self.dst_verify_ok = true;
+                }
+                self.dst_verifying = false;
+                self.worker = None;
             }
         }
+
         // Poll progress worker.
         if self.screen == AppScreen::Progress {
-            if let Some(w) = &self.worker {
+            let result = if let Some(w) = &self.worker {
                 let state = w.lock().unwrap();
                 if state.done {
-                    if let Some(ref err) = state.error {
-                        let err = err.clone();
-                        drop(state);
-                        self.screen = AppScreen::Error(err);
-                    } else {
-                        drop(state);
-                        self.screen = AppScreen::Done;
-                    }
+                    Some(state.error.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(err) = result {
+                if let Some(e) = err {
+                    self.screen = AppScreen::Error(e);
+                } else {
+                    self.screen = AppScreen::Done;
                 }
             }
         }
@@ -241,11 +264,11 @@ impl App {
 
     pub fn handle_key(&mut self, key: KeyEvent) {
         match self.screen.clone() {
-            AppScreen::Source   => self.handle_source_key(key),
-            AppScreen::Dest     => self.handle_dest_key(key),
-            AppScreen::Routes   => self.handle_routes_key(key),
+            AppScreen::Source => self.handle_source_key(key),
+            AppScreen::Dest => self.handle_dest_key(key),
+            AppScreen::Routes => self.handle_routes_key(key),
             AppScreen::Gateways => self.handle_gateways_key(key),
-            AppScreen::Confirm  => self.handle_confirm_key(key),
+            AppScreen::Confirm => self.handle_confirm_key(key),
             AppScreen::Progress => {}
             AppScreen::Done => {
                 if matches!(key.code, KeyCode::Char('q') | KeyCode::Enter | KeyCode::Esc) {
@@ -286,7 +309,9 @@ impl App {
                 self.src_verify_msg = None;
             }
             KeyCode::Enter => {
-                if self.src_verifying { return; }
+                if self.src_verifying {
+                    return;
+                }
                 if self.src_verify_ok {
                     self.load_routes();
                 } else {
@@ -320,8 +345,14 @@ impl App {
                 if let Some(r) = slot3.lock().unwrap().take() {
                     let mut w = wstate2.lock().unwrap();
                     match r {
-                        Ok(msg) => { w.log.push(msg); w.done = true; }
-                        Err(e)  => { w.error = Some(e); w.done = true; }
+                        Ok(msg) => {
+                            w.log.push(msg);
+                            w.done = true;
+                        }
+                        Err(e) => {
+                            w.error = Some(e);
+                            w.done = true;
+                        }
                     }
                     break;
                 }
@@ -386,7 +417,9 @@ impl App {
                 self.dst_verify_msg = None;
             }
             KeyCode::Enter => {
-                if self.dst_verifying { return; }
+                if self.dst_verifying {
+                    return;
+                }
                 if self.dst_verify_ok {
                     self.build_gateway_mappings();
                 } else {
@@ -420,8 +453,14 @@ impl App {
                 if let Some(r) = slot3.lock().unwrap().take() {
                     let mut w = wstate2.lock().unwrap();
                     match r {
-                        Ok(msg) => { w.log.push(msg); w.done = true; }
-                        Err(e)  => { w.error = Some(e); w.done = true; }
+                        Ok(msg) => {
+                            w.log.push(msg);
+                            w.done = true;
+                        }
+                        Err(e) => {
+                            w.error = Some(e);
+                            w.done = true;
+                        }
                     }
                     break;
                 }
@@ -431,14 +470,12 @@ impl App {
     }
 
     fn build_gateway_mappings(&mut self) {
-        // Collect all gateway UUIDs referenced in selected routes.
         let mut src_gateway_uuids: Vec<String> = Vec::new();
         for route in self.routes.iter().filter(|r| r.selected) {
             for detail in &route.details {
                 if detail.dialplan_detail_type == "bridge"
                     && detail.dialplan_detail_data.contains("/gateway/")
                 {
-                    // Extract UUID from sofia/gateway/<uuid>/$1
                     if let Some(uuid) = extract_gateway_uuid(&detail.dialplan_detail_data) {
                         if !src_gateway_uuids.contains(&uuid) {
                             src_gateway_uuids.push(uuid);
@@ -458,7 +495,13 @@ impl App {
         let slot2 = slot.clone();
 
         thread::spawn(move || {
-            let r = build_mappings(&src_host, &src_user, &dst_host, &dst_user, &src_gateway_uuids);
+            let r = build_mappings(
+                &src_host,
+                &src_user,
+                &dst_host,
+                &dst_user,
+                &src_gateway_uuids,
+            );
             *slot2.lock().unwrap() = Some(r);
         });
 
@@ -488,10 +531,14 @@ impl App {
         let n = self.routes.len();
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                if n > 0 { self.routes_list_idx = self.routes_list_idx.saturating_sub(1); }
+                if n > 0 {
+                    self.routes_list_idx = self.routes_list_idx.saturating_sub(1);
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if n > 0 { self.routes_list_idx = (self.routes_list_idx + 1).min(n - 1); }
+                if n > 0 {
+                    self.routes_list_idx = (self.routes_list_idx + 1).min(n - 1);
+                }
             }
             KeyCode::Char(' ') => {
                 if let Some(r) = self.routes.get_mut(self.routes_list_idx) {
@@ -500,7 +547,9 @@ impl App {
             }
             KeyCode::Char('a') => {
                 let all = self.routes.iter().all(|r| r.selected);
-                for r in &mut self.routes { r.selected = !all; }
+                for r in &mut self.routes {
+                    r.selected = !all;
+                }
             }
             KeyCode::Enter => {
                 if self.routes.iter().any(|r| r.selected) {
@@ -538,7 +587,6 @@ impl App {
                 if opts_len > 0 {
                     mapping.selected_idx = Some(mapping.list_state);
                 }
-                // Advance to next unresolved mapping or confirm.
                 if self.gateway_focus_idx + 1 < mappings_len {
                     self.gateway_focus_idx += 1;
                 } else {
@@ -546,7 +594,6 @@ impl App {
                 }
             }
             KeyCode::Char('s') => {
-                // Skip this gateway mapping.
                 mapping.selected_idx = None;
                 if self.gateway_focus_idx + 1 < mappings_len {
                     self.gateway_focus_idx += 1;
@@ -575,7 +622,6 @@ impl App {
         let dst_host = self.resolved_dst_host();
         let dst_user = self.dst_user_input.trim().to_string();
 
-        // Build UUID remap map.
         let mut uuid_remap: HashMap<String, String> = HashMap::new();
         for mapping in &self.gateway_mappings {
             if let Some(dest_uuid) = mapping.resolved_dest_uuid() {
@@ -583,10 +629,8 @@ impl App {
             }
         }
 
-        let routes: Vec<OutboundRoute> = self.routes.iter()
-            .filter(|r| r.selected)
-            .cloned()
-            .collect();
+        let routes: Vec<OutboundRoute> =
+            self.routes.iter().filter(|r| r.selected).cloned().collect();
 
         let wstate = Arc::new(Mutex::new(WorkerState::default()));
         let wstate2 = wstate.clone();
@@ -617,9 +661,8 @@ impl App {
 fn fetch_outbound_routes(host: &str, user: &str) -> Result<Vec<OutboundRoute>, String> {
     let session = SshSession::connect(host, user).map_err(|e| e.to_string())?;
 
-    // Fetch dialplans.
     let sql = "SELECT dialplan_uuid, dialplan_name, COALESCE(dialplan_description,''), \
-               dialplan_order, dialplan_enabled \
+               dialplan_order, dialplan_enabled, COALESCE(app_uuid,'') \
                FROM v_dialplans dp \
                WHERE dp.dialplan_context = 'global' \
                AND dp.domain_uuid IS NULL \
@@ -639,11 +682,12 @@ fn fetch_outbound_routes(host: &str, user: &str) -> Result<Vec<OutboundRoute>, S
 
     let mut routes = Vec::new();
     for line in out.lines() {
-        let p: Vec<&str> = line.splitn(5, '|').collect();
-        if p.len() < 5 { continue; }
+        let p: Vec<&str> = line.splitn(6, '|').collect();
+        if p.len() < 6 {
+            continue;
+        }
         let uuid = p[0].trim().to_string();
 
-        // Fetch details for this dialplan.
         let detail_sql = format!(
             "SELECT dialplan_detail_uuid, dialplan_detail_tag, dialplan_detail_type, \
              dialplan_detail_data, COALESCE(dialplan_detail_break,''), \
@@ -662,28 +706,31 @@ fn fetch_outbound_routes(host: &str, user: &str) -> Result<Vec<OutboundRoute>, S
         let mut details = Vec::new();
         for dline in detail_out.lines() {
             let dp: Vec<&str> = dline.splitn(9, '|').collect();
-            if dp.len() < 9 { continue; }
+            if dp.len() < 9 {
+                continue;
+            }
             details.push(RouteDetail {
-                dialplan_detail_uuid:    dp[0].trim().to_string(),
-                dialplan_detail_tag:     dp[1].trim().to_string(),
-                dialplan_detail_type:    dp[2].trim().to_string(),
-                dialplan_detail_data:    dp[3].trim().to_string(),
-                dialplan_detail_break:   dp[4].trim().to_string(),
-                dialplan_detail_inline:  dp[5].trim().to_string(),
-                dialplan_detail_group:   dp[6].trim().to_string(),
-                dialplan_detail_order:   dp[7].trim().to_string(),
+                dialplan_detail_uuid: dp[0].trim().to_string(),
+                dialplan_detail_tag: dp[1].trim().to_string(),
+                dialplan_detail_type: dp[2].trim().to_string(),
+                dialplan_detail_data: dp[3].trim().to_string(),
+                dialplan_detail_break: dp[4].trim().to_string(),
+                dialplan_detail_inline: dp[5].trim().to_string(),
+                dialplan_detail_group: dp[6].trim().to_string(),
+                dialplan_detail_order: dp[7].trim().to_string(),
                 dialplan_detail_enabled: dp[8].trim().to_string(),
             });
         }
 
         routes.push(OutboundRoute {
-            dialplan_uuid:        uuid,
-            dialplan_name:        p[1].trim().to_string(),
+            dialplan_uuid: uuid,
+            dialplan_name: p[1].trim().to_string(),
             dialplan_description: p[2].trim().to_string(),
-            dialplan_order:       p[3].trim().to_string(),
-            dialplan_enabled:     p[4].trim().to_string(),
+            dialplan_order: p[3].trim().to_string(),
+            dialplan_enabled: p[4].trim().to_string(),
+            app_uuid: p[5].trim().to_string(),
             details,
-            selected: true, // default all selected
+            selected: true,
         });
     }
     Ok(routes)
@@ -697,7 +744,9 @@ fn fetch_gateways(host: &str, user: &str) -> Result<Vec<Gateway>, String> {
     let mut gateways = Vec::new();
     for line in out.lines() {
         let p: Vec<&str> = line.splitn(2, '|').collect();
-        if p.len() < 2 { continue; }
+        if p.len() < 2 {
+            continue;
+        }
         gateways.push(Gateway {
             uuid: p[0].trim().to_string(),
             name: p[1].trim().to_string(),
@@ -707,8 +756,10 @@ fn fetch_gateways(host: &str, user: &str) -> Result<Vec<Gateway>, String> {
 }
 
 fn build_mappings(
-    src_host: &str, src_user: &str,
-    dst_host: &str, dst_user: &str,
+    src_host: &str,
+    src_user: &str,
+    dst_host: &str,
+    dst_user: &str,
     src_uuids: &[String],
 ) -> Result<Vec<GatewayMapping>, String> {
     let src_gws = fetch_gateways(src_host, src_user)?;
@@ -720,7 +771,6 @@ fn build_mappings(
             Some(g) => g.clone(),
             None => continue,
         };
-        // Try to auto-match by name.
         let auto_match = dst_gws.iter().position(|g| g.name == src_gw.name);
         let selected_idx = auto_match;
         let list_state = auto_match.unwrap_or(0);
@@ -735,9 +785,10 @@ fn build_mappings(
 }
 
 fn extract_gateway_uuid(bridge_data: &str) -> Option<String> {
-    // Format: sofia/gateway/<uuid>/... or sofia/gateway/<uuid>
     let parts: Vec<&str> = bridge_data.split('/').collect();
-    parts.iter().position(|&p| p == "gateway")
+    parts
+        .iter()
+        .position(|&p| p == "gateway")
         .and_then(|i| parts.get(i + 1))
         .map(|s| s.to_string())
 }
@@ -764,7 +815,6 @@ fn run_transfer(
         let progress = 0.1 + (i as f64 / total) * 0.8;
         log(&format!("Transferring {}…", route.dialplan_name), progress);
 
-        // Check if route already exists by name — delete first to avoid conflicts.
         let del_sql = format!(
             "DELETE FROM v_dialplans WHERE dialplan_name = '{}' \
              AND dialplan_context = 'global' AND domain_uuid IS NULL",
@@ -776,13 +826,13 @@ fn run_transfer(
         );
         let _ = session.exec(&del_cmd);
 
-        // Insert dialplan.
         let insert_sql = format!(
             "INSERT INTO v_dialplans \
-             (domain_uuid, dialplan_uuid, dialplan_context, dialplan_name, \
+             (domain_uuid, dialplan_uuid, app_uuid, dialplan_context, dialplan_name, \
               dialplan_order, dialplan_enabled, dialplan_description) \
-             VALUES (NULL, '{}', 'global', '{}', {}, {}, '{}')",
+             VALUES (NULL, '{}', '{}', global', '{}', {}, '{}', '{}')",
             route.dialplan_uuid,
+            route.app_uuid,
             route.dialplan_name.replace('\'', "''"),
             route.dialplan_order,
             route.dialplan_enabled,
@@ -792,10 +842,10 @@ fn run_transfer(
             "sudo -u postgres psql -d fusionpbx -t -A -P pager=off -c \"{}\"",
             insert_sql
         );
-        session.exec_ok(&insert_cmd)
+        session
+            .exec_ok(&insert_cmd)
             .map_err(|e| anyhow::anyhow!("insert dialplan {}: {}", route.dialplan_name, e))?;
 
-        // Insert details with UUID remapping on bridge actions.
         for detail in &route.details {
             let data = if detail.dialplan_detail_type == "bridge"
                 && detail.dialplan_detail_data.contains("/gateway/")
@@ -811,7 +861,7 @@ fn run_transfer(
                   dialplan_detail_type, dialplan_detail_data, dialplan_detail_break, \
                   dialplan_detail_inline, dialplan_detail_group, dialplan_detail_order, \
                   dialplan_detail_enabled) \
-                 VALUES (NULL, '{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}, {})",
+                 VALUES (NULL, '{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}, '{}')",
                 route.dialplan_uuid,
                 detail.dialplan_detail_uuid,
                 detail.dialplan_detail_tag.replace('\'', "''"),
@@ -827,25 +877,24 @@ fn run_transfer(
                 "sudo -u postgres psql -d fusionpbx -t -A -P pager=off -c \"{}\"",
                 detail_sql
             );
-            session.exec_ok(&detail_cmd)
+            session
+                .exec_ok(&detail_cmd)
                 .map_err(|e| anyhow::anyhow!("insert detail: {}", e))?;
         }
     }
 
     log("Reloading FusionPBX XML on destination…", 0.95);
-    let reload_cmd = "fs_cli -x 'reloadxml' 2>/dev/null || true";
-    let _ = session.exec(reload_cmd);
+    let _ = session.exec("fs_cli -x 'reloadxml' 2>/dev/null || true");
 
     Ok(())
 }
 
 fn remap_bridge_uuid(bridge_data: &str, uuid_remap: &HashMap<String, String>) -> String {
-    // sofia/gateway/<src_uuid>/$1 → sofia/gateway/<dst_uuid>/$1
     let parts: Vec<&str> = bridge_data.split('/').collect();
     if let Some(gw_pos) = parts.iter().position(|&p| p == "gateway") {
         if let Some(uuid) = parts.get(gw_pos + 1) {
             if let Some(new_uuid) = uuid_remap.get(*uuid) {
-                let mut new_parts = parts.clone();
+                let mut new_parts: Vec<&str> = parts.clone();
                 new_parts[gw_pos + 1] = new_uuid.as_str();
                 return new_parts.join("/");
             }
@@ -867,32 +916,56 @@ fn parse_ssh_config() -> HashMap<String, SshHostEntry> {
     let mut current_hostname: Option<String> = None;
     let mut current_user: Option<String> = None;
 
-    let mut flush = |map: &mut HashMap<String, SshHostEntry>,
-                     alias: &mut Option<String>,
-                     hostname: &mut Option<String>,
-                     user: &mut Option<String>| {
+    let flush = |map: &mut HashMap<String, SshHostEntry>,
+                 alias: &mut Option<String>,
+                 hostname: &mut Option<String>,
+                 user: &mut Option<String>| {
         if let (Some(a), Some(h), Some(u)) = (alias.take(), hostname.take(), user.take()) {
-            map.insert(a.to_lowercase(), SshHostEntry { hostname: h, user: u });
+            map.insert(
+                a.to_lowercase(),
+                SshHostEntry {
+                    hostname: h,
+                    user: u,
+                },
+            );
         }
     };
 
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
         let (key, val) = match line.split_once(|c: char| c.is_whitespace()) {
             Some(pair) => (pair.0.to_lowercase(), pair.1.trim().to_string()),
             None => continue,
         };
         match key.as_str() {
             "host" => {
-                flush(&mut map, &mut current_alias, &mut current_hostname, &mut current_user);
-                if !val.contains('*') { current_alias = Some(val); }
+                flush(
+                    &mut map,
+                    &mut current_alias,
+                    &mut current_hostname,
+                    &mut current_user,
+                );
+                if !val.contains('*') {
+                    current_alias = Some(val);
+                }
             }
-            "hostname" => { current_hostname = Some(val); }
-            "user"     => { current_user = Some(val); }
+            "hostname" => {
+                current_hostname = Some(val);
+            }
+            "user" => {
+                current_user = Some(val);
+            }
             _ => {}
         }
     }
-    flush(&mut map, &mut current_alias, &mut current_hostname, &mut current_user);
+    flush(
+        &mut map,
+        &mut current_alias,
+        &mut current_hostname,
+        &mut current_user,
+    );
     map
 }

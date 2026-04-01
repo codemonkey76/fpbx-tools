@@ -41,7 +41,7 @@ fn main() -> Result<()> {
         let timeout = tick.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode.Char('q')
+                if key.code == KeyCode::Char('q')
                     && key.modifiers == KeyModifiers::NONE
                     && !app.is_running_task()
                 {
