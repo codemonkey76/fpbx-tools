@@ -3,6 +3,7 @@ pub mod db;
 pub mod domain;
 pub mod ssh;
 pub mod verify;
+pub mod version;
 
 pub use bundle::*;
 pub use domain::*;

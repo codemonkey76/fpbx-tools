@@ -12,6 +12,7 @@ use flate2::{write::GzEncoder, read::GzDecoder, Compression};
 use tracing::info;
 
 use crate::domain::{DomainTableCounts, FpbxDomain};
+use crate::version::FpbxVersion;
 
 pub const BUNDLE_EXT: &str = "fpbx";
 pub const MANIFEST_NAME: &str = "manifest.json";
@@ -30,6 +31,9 @@ pub struct BundleManifest {
     pub file_paths: Vec<String>,
     pub db_dump_bytes: u64,
     pub files_tar_bytes: u64,
+    /// FusionPBX deployment version detected at backup time (None for older bundles).
+    #[serde(default)]
+    pub source_version: Option<FpbxVersion>,
 }
 
 impl BundleManifest {
@@ -40,6 +44,7 @@ impl BundleManifest {
         file_paths: Vec<String>,
         db_dump_bytes: u64,
         files_tar_bytes: u64,
+        source_version: Option<FpbxVersion>,
     ) -> Self {
         Self {
             version: 1,
@@ -50,6 +55,7 @@ impl BundleManifest {
             file_paths,
             db_dump_bytes,
             files_tar_bytes,
+            source_version,
         }
     }
 }

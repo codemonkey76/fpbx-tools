@@ -5,6 +5,7 @@ use fpbx_core::{
     db::export_domain_sql_v2,
     domain::{count_domain_rows, list_domains, DomainFilePaths, FpbxDomain},
     ssh::{SshSession, VerifyResult},
+    version::detect_version,
 };
 use std::{
     path::PathBuf,
@@ -502,6 +503,10 @@ fn run_backup(
     let files_tar_path = staging.join("files.tar.gz");
     let files_bytes = export_domain_files(&session, &existing_paths, &files_tar_path, progress)?;
 
+    // Detect source server version.
+    progress("Detecting server version…");
+    let source_version = detect_version(&session).ok();
+
     // Build manifest.
     let manifest = BundleManifest::new(
         &host,
@@ -510,6 +515,7 @@ fn run_backup(
         existing_paths,
         db_bytes,
         files_bytes,
+        source_version,
     );
 
     // Create bundle.

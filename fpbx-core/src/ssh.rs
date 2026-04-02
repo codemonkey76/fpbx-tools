@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 use tracing::{debug, info};
+use crate::version::FpbxVersion;
 
 /// A connected, authenticated SSH session.
 pub struct SshSession {
@@ -137,6 +138,7 @@ impl SshSession {
     }
 
     /// Verify basic connectivity and that the remote looks like a FusionPBX host.
+    /// Also detects the FusionPBX deployment version.
     pub fn verify_fusionpbx(&self) -> Result<VerifyResult> {
         let psql = self.exec_ok("which psql 2>/dev/null || echo missing")?;
         let has_psql = !psql.trim().contains("missing");
@@ -156,12 +158,19 @@ impl SshSession {
             None
         };
 
+        let fpbx_version = if has_psql && has_freeswitch {
+            crate::version::detect_version(self).ok()
+        } else {
+            None
+        };
+
         Ok(VerifyResult {
             host: self.host.clone(),
             user: self.user.clone(),
             has_psql,
             has_freeswitch,
             pg_version,
+            fpbx_version,
         })
     }
 
@@ -181,6 +190,7 @@ pub struct VerifyResult {
     pub has_psql: bool,
     pub has_freeswitch: bool,
     pub pg_version: Option<String>,
+    pub fpbx_version: Option<FpbxVersion>,
 }
 
 impl VerifyResult {
@@ -190,12 +200,13 @@ impl VerifyResult {
 
     pub fn summary(&self) -> String {
         format!(
-            "{}@{} — psql:{} freeswitch:{} {}",
+            "{}@{} — psql:{} freeswitch:{} {} {}",
             self.user,
             self.host,
             if self.has_psql { "✓" } else { "✗" },
             if self.has_freeswitch { "✓" } else { "✗" },
             self.pg_version.as_deref().unwrap_or(""),
+            self.fpbx_version.as_ref().map(|v| v.label()).unwrap_or_default(),
         )
     }
 }

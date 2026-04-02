@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use super::app::{App, AppScreen};
+use fpbx_core::version::{check_compat, VersionCompat};
 
 const ACCENT: Color = Color::Magenta;
 const MUTED: Color = Color::DarkGray;
@@ -274,6 +275,50 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
         Span::styled("Destination:  ", Style::default().fg(MUTED)),
         Span::styled(format!("{}@{}", app.user_input, app.host_input), Style::default().fg(TITLE)),
     ]));
+    lines.push(Line::from(""));
+
+    // Version / compatibility info.
+    let src_versions: Vec<_> = {
+        let selected = app.selected_bundles();
+        if !selected.is_empty() {
+            selected.iter().filter_map(|(_, m)| m.source_version.clone()).collect()
+        } else if let Some(m) = &app.selected_manifest {
+            m.source_version.iter().cloned().collect()
+        } else {
+            vec![]
+        }
+    };
+    if let Some(dst_v) = &app.dest_version {
+        lines.push(Line::from(vec![
+            Span::styled("Destination:  ", Style::default().fg(MUTED)),
+            Span::styled(dst_v.label(), Style::default().fg(TITLE)),
+        ]));
+        if src_versions.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Source version unknown (old bundle) — column intersection will be applied",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else {
+            for src_v in &src_versions {
+                let compat = check_compat(src_v, dst_v);
+                let (label, color) = match &compat {
+                    VersionCompat::Identical => (compat.status_line(), OK),
+                    VersionCompat::Compatible { .. } => (compat.status_line(), Color::Yellow),
+                    VersionCompat::Unsupported { .. } => (compat.status_line(), ERR),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Source:       ", Style::default().fg(MUTED)),
+                    Span::styled(src_v.label(), Style::default().fg(TITLE)),
+                ]));
+                lines.push(Line::from(Span::styled(label, Style::default().fg(color))));
+            }
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Destination version not yet detected",
+            Style::default().fg(MUTED),
+        )));
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "This will import database records and files into the destination server.",

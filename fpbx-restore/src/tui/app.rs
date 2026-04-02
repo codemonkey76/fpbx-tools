@@ -1,6 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
-use fpbx_core::bundle::{default_backup_dir, list_bundles, BundleManifest};
+use fpbx_core::bundle::{default_backup_dir, default_staging_dir, list_bundles, open_bundle, BundleManifest, DB_DUMP_NAME, FILES_TAR_NAME};
+use fpbx_core::db::import_domain_sql;
 use fpbx_core::ssh::{SshSession, VerifyResult};
+use fpbx_core::version::{check_compat, FpbxVersion};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -58,6 +60,9 @@ pub struct App {
     pub verify_result: Option<Result<VerifyResult, String>>,
     pub verifying: bool,
 
+    // Detected destination version (populated after successful verify).
+    pub dest_version: Option<FpbxVersion>,
+
     // Progress.
     pub worker: Option<Arc<Mutex<WorkerState>>>,
 }
@@ -85,6 +90,7 @@ impl App {
             active_field: 0,
             verify_result: None,
             verifying: false,
+            dest_version: None,
             worker: None,
         }
     }
@@ -119,12 +125,13 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-        // Poll verify worker on Server screen.
+            // Poll verify worker on Server screen.
         if self.screen == AppScreen::Server && self.verifying {
             if let Some(w) = &self.worker {
                 let state = w.lock().unwrap();
                 if state.done {
                     if let Some(ref v) = state.verify_result {
+                        self.dest_version = v.fpbx_version.clone();
                         self.verify_result = Some(Ok(v.clone()));
                         self.verifying = false;
                     } else if let Some(ref err) = state.error {
@@ -329,13 +336,123 @@ impl App {
     fn handle_confirm_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('y') | KeyCode::Enter => {
-                // TODO: start restore worker
-                self.screen = AppScreen::Progress;
+                self.start_restore_worker();
             }
             KeyCode::Char('n') | KeyCode::Esc => self.screen = AppScreen::Server,
             _ => {}
         }
     }
+
+    fn start_restore_worker(&mut self) {
+        let host = self.resolved_host();
+        let user = self.user_input.trim().to_string();
+        let bundles: Vec<std::path::PathBuf> =
+            self.selected_bundle_paths.iter().cloned().collect();
+        let dest_version = self.dest_version.clone();
+
+        let wstate = Arc::new(Mutex::new(WorkerState::default()));
+        let wstate2 = wstate.clone();
+        self.worker = Some(wstate);
+        self.screen = AppScreen::Progress;
+
+        thread::spawn(move || {
+            let n = bundles.len();
+            for (idx, bundle_path) in bundles.into_iter().enumerate() {
+                {
+                    let mut w = wstate2.lock().unwrap();
+                    w.progress = idx as f64 / n as f64;
+                    w.log.push(format!(
+                        "--- Bundle {}/{}: {} ---",
+                        idx + 1,
+                        n,
+                        bundle_path.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                    w.current_task = format!("Restoring bundle {}/{}…", idx + 1, n);
+                }
+
+                let ws = wstate2.clone();
+                let mut progress = move |msg: &str| {
+                    let mut w = ws.lock().unwrap();
+                    w.log.push(msg.to_string());
+                    w.current_task = msg.to_string();
+                };
+
+                match run_restore(host.clone(), user.clone(), bundle_path, dest_version.clone(), &mut progress) {
+                    Ok(()) => {
+                        let mut w = wstate2.lock().unwrap();
+                        w.log.push("✓ Restore complete".to_string());
+                    }
+                    Err(e) => {
+                        let mut w = wstate2.lock().unwrap();
+                        w.error = Some(e.to_string());
+                        w.done = true;
+                        return;
+                    }
+                }
+            }
+
+            let mut w = wstate2.lock().unwrap();
+            w.progress = 1.0;
+            w.done = true;
+        });
+    }
+}
+
+fn run_restore(
+    host: String,
+    user: String,
+    bundle_path: std::path::PathBuf,
+    dest_version: Option<FpbxVersion>,
+    progress: &mut dyn FnMut(&str),
+) -> anyhow::Result<()> {
+    let stem = bundle_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bundle");
+    let staging = default_staging_dir().join(stem);
+    std::fs::create_dir_all(&staging)?;
+
+    progress("Opening and verifying bundle…");
+    let manifest = open_bundle(&bundle_path, &staging)?;
+
+    // Version compatibility check.
+    if let (Some(src_v), Some(dst_v)) = (&manifest.source_version, &dest_version) {
+        let compat = check_compat(src_v, dst_v);
+        if !compat.is_ok() {
+            anyhow::bail!("{}", compat.status_line());
+        }
+        progress(&compat.status_line());
+    } else {
+        progress("Version info unavailable — proceeding with column intersection");
+    }
+
+    progress("Connecting to destination server…");
+    let session = SshSession::connect(&host, &user)?;
+
+    let sql_path = staging.join(DB_DUMP_NAME);
+    import_domain_sql(&session, &sql_path, progress)?;
+
+    let files_tar = staging.join(FILES_TAR_NAME);
+    if files_tar.exists() && files_tar.metadata().map(|m| m.len()).unwrap_or(0) > 100 {
+        progress("Uploading file archive to destination…");
+        let remote_tar = "/tmp/fpbx-restore-files.tar.gz";
+        session.upload(&files_tar, std::path::Path::new(remote_tar), 0o600)?;
+        progress("Creating destination directories…");
+        for dir in &[
+            "/var/lib/freeswitch/storage/voicemail/default",
+            "/var/lib/freeswitch/recordings",
+            "/etc/freeswitch/dialplan",
+            "/etc/freeswitch/directory",
+        ] {
+            let _ = session.exec(&format!("sudo mkdir -p {}", dir));
+        }
+        progress("Extracting files on destination server…");
+        session.exec_ok(&format!("sudo tar xzf {} -C /", remote_tar))?;
+        let _ = session.exec(&format!("rm -f {}", remote_tar));
+    }
+
+    let _ = std::fs::remove_dir_all(&staging);
+    Ok(())
 }
 
 fn whoami_user() -> String {
