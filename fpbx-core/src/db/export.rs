@@ -4,77 +4,10 @@ use tracing::info;
 
 use crate::{domain::DOMAIN_TABLES, ssh::SshSession};
 
-/// Export all domain-scoped data as a gzipped SQL dump.
-/// The dump is written to `local_path` on the jump box.
-///
-/// Strategy:
-///   1. Build a combined SQL script using COPY TO STDOUT with a WHERE clause.
-///   2. Stream it through gzip on the remote.
-///   3. Download via SFTP.
+/// Export all domain-scoped tables as filtered COPY FROM stdin blocks,
+/// wrapped in `BEGIN` / `COMMIT` and compressed with gzip.
+/// Returns the number of compressed bytes written to `local_path`.
 pub fn export_domain_sql(
-    session: &SshSession,
-    domain_uuid: &str,
-    local_path: &Path,
-    progress: &mut dyn FnMut(&str),
-) -> Result<()> {
-    info!("Exporting SQL for domain {}", domain_uuid);
-
-    // Build remote temp file path.
-    let remote_sql = format!("/tmp/fpbx-export-{}.sql.gz", &domain_uuid[..8]);
-
-    // Build a pg_dump using --table and inject row filtering via a wrapper script.
-    // We use a COPY approach: for each table emit the schema then COPY data.
-    let table_flags: String = DOMAIN_TABLES
-        .iter()
-        .map(|t| format!("-t {}", t))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    // Step 1: dump schema-only (DDL) for all domain tables.
-    progress("Dumping table schemas…");
-    let schema_cmd = format!(
-        "sudo -u postgres pg_dump -d fusionpbx --schema-only {} | gzip > {}",
-        table_flags, remote_sql
-    );
-    session
-        .exec_ok(&schema_cmd)
-        .context("pg_dump schema failed")?;
-
-    // Step 2: for each table, append filtered COPY data.
-    // We append to the same gz by streaming through gzip -c in append mode.
-    for table in DOMAIN_TABLES {
-        progress(&format!("Exporting {}…", table));
-
-        let copy_sql = format!(
-            r#"COPY (SELECT * FROM {} WHERE domain_uuid = '{}') TO STDOUT"#,
-            table, domain_uuid
-        );
-        // Use psql -c "COPY ..." and append gzipped output.
-        // We separate schema and data files; reassemble at restore.
-        let append_cmd = format!(
-            r#"sudo -u postgres psql -d fusionpbx -c "{}" 2>/dev/null | gzip >> {} || true"#,
-            copy_sql.replace('"', "\\\""),
-            remote_sql
-        );
-        session.exec(&append_cmd).context("copy table failed")?;
-    }
-
-    // Step 3: download.
-    progress("Downloading SQL dump…");
-    session
-        .download(Path::new(&remote_sql), local_path)
-        .context("download SQL dump")?;
-
-    // Cleanup remote temp.
-    let _ = session.exec(&format!("rm -f {}", remote_sql));
-
-    info!("SQL export complete -> {:?}", local_path);
-    Ok(())
-}
-
-/// Proper per-table export using separate schema + filtered COPY data.
-/// Produces a plain SQL file suitable for psql import.
-pub fn export_domain_sql_v2(
     session: &SshSession,
     domain_uuid: &str,
     local_path: &Path,

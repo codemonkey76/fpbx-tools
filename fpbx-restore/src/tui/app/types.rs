@@ -1,10 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
-use fpbx_core::{bundle::BundleManifest, ssh::VerifyResult, version::FpbxVersion};
+use fpbx_core::{SshHostEntry, WorkerSlot, bundle::BundleManifest, ssh::VerifyResult, version::FpbxVersion};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppScreen {
@@ -15,22 +12,6 @@ pub enum AppScreen {
     Progress,
     Done,
     Error(String),
-}
-
-#[derive(Debug, Default)]
-pub struct WorkerState {
-    pub log: Vec<String>,
-    pub progress: f64,
-    pub current_task: String,
-    pub done: bool,
-    pub error: Option<String>,
-    pub verify_result: Option<VerifyResult>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SshHostEntry {
-    pub hostname: String,
-    pub user: String,
 }
 
 pub struct App {
@@ -66,5 +47,5 @@ pub struct App {
     pub confirm_field: usize, // 0 = editing dest domain, 1 = ready to confirm
 
     // Progress.
-    pub worker: Option<Arc<Mutex<WorkerState>>>,
+    pub worker: Option<WorkerSlot>,
 }

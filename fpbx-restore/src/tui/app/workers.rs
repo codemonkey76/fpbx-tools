@@ -1,15 +1,11 @@
 use fpbx_core::{
+    WorkerSlot,
     bundle::{BundleManifest, DB_DUMP_NAME, FILES_TAR_NAME, default_staging_dir, open_bundle},
     db::{DomainRename, import_domain_sql},
     ssh::SshSession,
     version::{FpbxVersion, check_compat},
 };
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-
-use super::types::WorkerState;
+use std::path::PathBuf;
 
 pub(super) fn build_rename(manifest: &BundleManifest, dest_name: &str) -> Option<DomainRename> {
     let dest_name = dest_name.trim();
@@ -64,7 +60,7 @@ pub(super) fn run_restore(
     if files_tar.exists() && files_tar.metadata().map(|m| m.len()).unwrap_or(0) > 100 {
         progress("Uploading file archive to destination…");
         let remote_tar = "/tmp/fpbx-restore-files.tar.gz";
-        session.upload(&files_tar, std::path::Path::new(remote_tar), 0o600)?;
+        session.upload(&files_tar, std::path::Path::new(remote_tar))?;
         progress("Creating destination directories…");
         for dir in &[
             "/var/lib/freeswitch/storage/voicemail/default",
@@ -89,7 +85,7 @@ pub(super) fn run_restore_worker(
     user: String,
     dest_version: Option<FpbxVersion>,
     bundles_with_rename: Vec<(PathBuf, Option<DomainRename>)>,
-    wstate: Arc<Mutex<WorkerState>>,
+    wstate: WorkerSlot,
 ) {
     let n = bundles_with_rename.len();
     for (idx, (bundle_path, rename)) in bundles_with_rename.into_iter().enumerate() {

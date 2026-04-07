@@ -1,11 +1,8 @@
 use anyhow::Result;
-use fpbx_core::ssh::SshSession;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use fpbx_core::{WorkerSlot, ssh::SshSession};
+use std::collections::HashMap;
 
-use super::types::{Gateway, GatewayMapping, OutboundRoute, RouteDetail, WorkerState};
+use super::types::{Gateway, GatewayMapping, OutboundRoute, RouteDetail};
 
 pub(super) fn fetch_outbound_routes(host: &str, user: &str) -> Result<Vec<OutboundRoute>, String> {
     let session = SshSession::connect(host, user).map_err(|e| e.to_string())?;
@@ -138,7 +135,7 @@ pub(super) fn run_transfer(
     dst_user: &str,
     routes: &[OutboundRoute],
     uuid_remap: &HashMap<String, String>,
-    wstate: &Arc<Mutex<WorkerState>>,
+    wstate: &WorkerSlot,
 ) -> Result<()> {
     let log = |msg: &str, progress: f64| {
         let mut w = wstate.lock().unwrap();

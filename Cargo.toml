@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "fpbx-core",
+  "fpbx-tui-shared",
   "fpbx-backup",
   "fpbx-restore",
   "fpbx-info",

@@ -1,12 +1,12 @@
 mod handlers;
-mod ssh_config;
 mod workers;
 
 pub mod types;
 
-pub use types::{App, AppScreen, OutboundRoute};
+pub use types::{App, AppScreen};
 
-use ssh_config::parse_ssh_config;
+use fpbx_core::{parse_ssh_config, resolve_host};
+use fpbx_tui_shared::TuiApp;
 
 impl App {
     pub fn new() -> Self {
@@ -50,19 +50,11 @@ impl App {
     }
 
     pub fn resolved_src_host(&self) -> String {
-        let key = self.src_host_input.trim().to_lowercase();
-        self.ssh_hosts
-            .get(&key)
-            .map(|e| e.hostname.clone())
-            .unwrap_or_else(|| self.src_host_input.trim().to_string())
+        resolve_host(&self.src_host_input, &self.ssh_hosts)
     }
 
     pub fn resolved_dst_host(&self) -> String {
-        let key = self.dst_host_input.trim().to_lowercase();
-        self.ssh_hosts
-            .get(&key)
-            .map(|e| e.hostname.clone())
-            .unwrap_or_else(|| self.dst_host_input.trim().to_string())
+        resolve_host(&self.dst_host_input, &self.ssh_hosts)
     }
 
     pub(super) fn apply_src_ssh_lookup(&mut self) {
@@ -77,11 +69,6 @@ impl App {
         if let Some(e) = self.ssh_hosts.get(&key) {
             self.dst_user_input = e.user.clone();
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn selected_routes(&self) -> Vec<&OutboundRoute> {
-        self.routes.iter().filter(|r| r.selected).collect()
     }
 
     pub fn tick(&mut self) {
@@ -156,4 +143,12 @@ impl App {
             }
         }
     }
+}
+
+impl TuiApp for App {
+    fn handle_key(&mut self, key: crossterm::event::KeyEvent) { self.handle_key(key); }
+    fn tick(&mut self) { self.tick(); }
+    fn is_running_task(&self) -> bool { self.is_running_task() }
+    fn is_typing(&self) -> bool { self.is_typing() }
+    fn should_quit(&self) -> bool { self.should_quit }
 }

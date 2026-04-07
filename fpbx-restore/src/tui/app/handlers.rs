@@ -1,15 +1,12 @@
 use crossterm::event::{KeyCode, KeyEvent};
-use fpbx_core::{
-    db::DomainRename,
-    ssh::{SshSession, VerifyResult},
-};
+use fpbx_core::{new_worker, db::DomainRename, ssh::{SshSession, VerifyResult}};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
     thread,
 };
 
-use super::types::{App, AppScreen, WorkerState};
+use super::types::{App, AppScreen};
 use super::workers::{build_rename, run_restore_worker};
 
 type VerifySlot = Option<Result<VerifyResult, String>>;
@@ -192,7 +189,7 @@ impl App {
             *slot2.lock().unwrap() = Some(r);
         });
 
-        let wstate = Arc::new(Mutex::new(WorkerState::default()));
+        let wstate = new_worker();
         let wstate2 = wstate.clone();
         self.worker = Some(wstate);
 
@@ -275,7 +272,7 @@ impl App {
             }
         };
 
-        let wstate = Arc::new(Mutex::new(WorkerState::default()));
+        let wstate = new_worker();
         let wstate2 = wstate.clone();
         self.worker = Some(wstate);
         self.screen = AppScreen::Progress;

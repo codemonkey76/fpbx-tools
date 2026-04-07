@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+
+
+use fpbx_core::{SshHostEntry, WorkerSlot};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppScreen {
@@ -60,21 +62,6 @@ impl GatewayMapping {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct WorkerState {
-    pub log: Vec<String>,
-    pub progress: f64,
-    pub current_task: String,
-    pub done: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SshHostEntry {
-    pub hostname: String,
-    pub user: String,
-}
-
 pub struct App {
     pub screen: AppScreen,
     pub should_quit: bool,
@@ -108,5 +95,5 @@ pub struct App {
     pub gateway_focus_idx: usize,
 
     // Progress.
-    pub worker: Option<Arc<Mutex<WorkerState>>>,
+    pub worker: Option<WorkerSlot>,
 }

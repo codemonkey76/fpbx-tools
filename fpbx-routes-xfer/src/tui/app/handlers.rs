@@ -1,12 +1,12 @@
 use crossterm::event::{KeyCode, KeyEvent};
-use fpbx_core::ssh::SshSession;
+use fpbx_core::{new_worker, ssh::SshSession};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
     thread,
 };
 
-use super::types::{App, AppScreen, GatewayMapping, OutboundRoute, WorkerState};
+use super::types::{App, AppScreen, GatewayMapping, OutboundRoute};
 use super::workers::{build_mappings, extract_gateway_uuid, fetch_outbound_routes, run_transfer};
 
 type RouteResult = Option<Result<Vec<OutboundRoute>, String>>;
@@ -88,7 +88,7 @@ impl App {
                 .map_err(|e| e.to_string());
             *slot2.lock().unwrap() = Some(r);
         });
-        let wstate = Arc::new(Mutex::new(WorkerState::default()));
+        let wstate = new_worker();
         let wstate2 = wstate.clone();
         self.worker = Some(wstate);
         thread::spawn(move || {
@@ -195,7 +195,7 @@ impl App {
                 .map_err(|e| e.to_string());
             *slot2.lock().unwrap() = Some(r);
         });
-        let wstate = Arc::new(Mutex::new(WorkerState::default()));
+        let wstate = new_worker();
         let wstate2 = wstate.clone();
         self.worker = Some(wstate);
         thread::spawn(move || {
@@ -379,7 +379,7 @@ impl App {
         let routes: Vec<OutboundRoute> =
             self.routes.iter().filter(|r| r.selected).cloned().collect();
 
-        let wstate = Arc::new(Mutex::new(WorkerState::default()));
+        let wstate = new_worker();
         let wstate2 = wstate.clone();
         self.worker = Some(wstate);
         self.screen = AppScreen::Progress;

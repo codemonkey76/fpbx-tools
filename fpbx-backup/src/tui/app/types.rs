@@ -1,10 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
-use fpbx_core::{domain::FpbxDomain, ssh::VerifyResult};
+use fpbx_core::{SshHostEntry, WorkerSlot, domain::FpbxDomain, ssh::VerifyResult};
 
 /// Which screen the TUI is showing.
 #[derive(Debug, Clone, PartialEq)]
@@ -15,24 +12,6 @@ pub enum AppScreen {
     Progress,      // Export + bundle progress with log
     Done,          // Summary + bundle location
     Error(String), // Error overlay
-}
-
-/// Shared state for the background worker thread.
-#[derive(Debug, Default)]
-pub struct WorkerState {
-    pub log: Vec<String>,
-    pub progress: f64, // 0.0 – 1.0
-    pub current_task: String,
-    pub done: bool,
-    pub error: Option<String>,
-    pub bundle_paths: Vec<PathBuf>,
-    pub verify_result: Option<VerifyResult>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SshHostEntry {
-    pub hostname: String,
-    pub user: String,
 }
 
 pub struct App {
@@ -63,7 +42,7 @@ pub struct App {
     pub selected_domain_uuids: HashSet<String>,
 
     // Progress screen.
-    pub worker: Option<Arc<Mutex<WorkerState>>>,
+    pub worker: Option<WorkerSlot>,
 
     // Done.
     pub bundle_paths: Vec<PathBuf>,

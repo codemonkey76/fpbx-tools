@@ -122,22 +122,18 @@ pub fn count_domain_rows(session: &SshSession, domain_uuid: &str) -> Result<Doma
     Ok(DomainTableCounts(counts))
 }
 
+fn build_psql_cmd(sql: &str) -> String {
+    let escaped = sql.replace('\'', "'\\''");
+    format!("sudo -u postgres psql -d fusionpbx -t -A -F'|' -c '{}'", escaped)
+}
+
 /// Run a psql command as the postgres user, return stdout.
 pub fn psql_query(session: &SshSession, sql: &str) -> Result<String> {
-    let escaped = sql.replace('\'', "'\\''");
-    let cmd = format!(
-        "sudo -u postgres psql -d fusionpbx -t -A -F'|' -c '{}'",
-        escaped
-    );
-    session.exec_ok(&cmd).context("psql query failed")
+    session.exec_ok(&build_psql_cmd(sql)).context("psql query failed")
 }
 
 fn psql_cmd(sql: &str) -> String {
-    let escaped = sql.replace('\'', "'\\''");
-    format!(
-        "sudo -u postgres psql -d fusionpbx -t -A -F'|' -c '{}' 2>/dev/null || echo 0",
-        escaped
-    )
+    format!("{} 2>/dev/null || echo 0", build_psql_cmd(sql))
 }
 
 /// Resolve file paths on the remote server for a given domain.

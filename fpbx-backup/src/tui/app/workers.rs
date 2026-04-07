@@ -1,17 +1,13 @@
 use anyhow::Result;
 use fpbx_core::{
+    WorkerSlot,
     bundle::{BundleManifest, create_bundle, default_staging_dir},
-    db::export_domain_sql_v2,
+    db::export_domain_sql,
     domain::{DomainFilePaths, FpbxDomain, count_domain_rows},
     ssh::SshSession,
     version::detect_version,
 };
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-
-use super::types::WorkerState;
+use std::path::PathBuf;
 
 pub(super) fn run_backup(
     host: String,
@@ -33,7 +29,7 @@ pub(super) fn run_backup(
     // Export SQL.
     progress("Exporting database records…");
     let sql_path = staging.join("db.sql.gz");
-    let db_bytes = export_domain_sql_v2(&session, &domain.domain_uuid, &sql_path, progress)?;
+    let db_bytes = export_domain_sql(&session, &domain.domain_uuid, &sql_path, progress)?;
 
     // Export files.
     progress("Discovering domain file paths…");
@@ -107,7 +103,7 @@ pub(super) fn run_backup_worker(
     user: String,
     domains: Vec<FpbxDomain>,
     output_dir: PathBuf,
-    wstate: Arc<Mutex<WorkerState>>,
+    wstate: WorkerSlot,
 ) {
     let n = domains.len();
     for (idx, domain) in domains.into_iter().enumerate() {

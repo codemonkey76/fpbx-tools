@@ -1,15 +1,12 @@
 use crossterm::event::{KeyCode, KeyEvent};
-use fpbx_core::{
-    domain::list_domains,
-    ssh::{SshSession, VerifyResult},
-};
+use fpbx_core::{new_worker, domain::list_domains, ssh::{SshSession, VerifyResult}};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
     thread,
 };
 
-use super::types::{App, AppScreen, WorkerState};
+use super::types::{App, AppScreen};
 use super::workers::run_backup_worker;
 
 impl App {
@@ -96,7 +93,7 @@ impl App {
                 .map_err(|e: anyhow::Error| e.to_string());
             *slot2.lock().unwrap() = Some(r);
         });
-        let wstate = Arc::new(Mutex::new(WorkerState::default()));
+        let wstate = new_worker();
         let wstate2 = wstate.clone();
         self.worker = Some(wstate);
         thread::spawn(move || {
@@ -271,7 +268,7 @@ impl App {
             .collect::<Vec<_>>();
         let output_dir = PathBuf::from(self.output_path_input.trim());
 
-        let wstate = Arc::new(Mutex::new(WorkerState::default()));
+        let wstate = new_worker();
         let wstate2 = wstate.clone();
         self.worker = Some(wstate);
         self.screen = AppScreen::Progress;

@@ -57,7 +57,7 @@ pub fn import_domain_sql(
     let tmp = local_sql_gz.with_extension("adapted.gz");
     std::fs::write(&tmp, &adapted_gz).context("write adapted gz")?;
     session
-        .upload(&tmp, Path::new(remote_path), 0o600)
+        .upload(&tmp, Path::new(remote_path))
         .context("upload adapted SQL")?;
     let _ = std::fs::remove_file(&tmp);
 

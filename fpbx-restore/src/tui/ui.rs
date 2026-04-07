@@ -2,9 +2,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
+
+use fpbx_tui_shared::{ServerInputs, VerifyStatus, draw_error, draw_progress, draw_server};
 
 use super::app::{App, AppScreen};
 use fpbx_core::version::{check_compat, VersionCompat};
@@ -19,11 +21,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
     draw_header(f, app, chunks[0]);
@@ -32,9 +30,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.screen.clone() {
         AppScreen::BundlePicker => draw_picker(f, app, chunks[1]),
         AppScreen::Preview => draw_preview(f, app, chunks[1]),
-        AppScreen::Server => draw_server(f, app, chunks[1]),
+        AppScreen::Server => draw_server_screen(f, app, chunks[1]),
         AppScreen::Confirm => draw_confirm(f, app, chunks[1]),
-        AppScreen::Progress => draw_progress(f, app, chunks[1]),
+        AppScreen::Progress => draw_progress(f, chunks[1], &app.worker, ACCENT),
         AppScreen::Done => draw_done(f, app, chunks[1]),
         AppScreen::Error(msg) => {
             draw_picker(f, app, chunks[1]);
@@ -67,9 +65,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled(format!(" {}  ", label), Style::default().fg(MUTED)));
         }
     }
-    let p = Paragraph::new(Line::from(spans))
-        .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(MUTED)));
-    f.render_widget(p, area);
+    f.render_widget(
+        Paragraph::new(Line::from(spans))
+            .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(MUTED))),
+        area,
+    );
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -101,12 +101,11 @@ fn draw_picker(f: &mut Frame, app: &mut App, area: Rect) {
             .iter()
             .map(|(path, m)| {
                 let checked = app.selected_bundle_paths.contains(path);
-                let check = if checked { "[✓] " } else { "[ ] " };
                 let check_color = if checked { OK } else { MUTED };
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
                 let date = m.created_at.format("%Y-%m-%d %H:%M").to_string();
                 ListItem::new(Line::from(vec![
-                    Span::styled(check, Style::default().fg(check_color)),
+                    Span::styled(if checked { "[✓] " } else { "[ ] " }, Style::default().fg(check_color)),
                     Span::styled(format!("{} ", m.domain.domain_name), Style::default().fg(TITLE).add_modifier(Modifier::BOLD)),
                     Span::styled(format!("  {}  ", date), Style::default().fg(MUTED)),
                     Span::styled(name, Style::default().fg(MUTED)),
@@ -127,14 +126,10 @@ fn draw_picker(f: &mut Frame, app: &mut App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(MUTED))
-                .title(Span::styled(
-                    title,
-                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                )),
+                .title(Span::styled(title, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))),
         )
         .highlight_style(Style::default().bg(Color::DarkGray).fg(TITLE).add_modifier(Modifier::BOLD))
         .highlight_symbol("▶ ");
-
     f.render_stateful_widget(list, area, &mut app.bundle_list_state);
 }
 
@@ -188,71 +183,42 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(ACCENT),
     )));
 
-    let p = Paragraph::new(Text::from(lines))
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(MUTED)))
-        .wrap(Wrap { trim: false });
-    f.render_widget(p, chunks[0]);
+    f.render_widget(
+        Paragraph::new(Text::from(lines))
+            .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(MUTED)))
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
 }
 
-fn draw_server(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),  // spacing
-            Constraint::Length(3),  // host field
-            Constraint::Length(3),  // user field
-            Constraint::Length(2),  // spacing
-            Constraint::Length(3),  // verify status
-            Constraint::Min(0),
-        ])
-        .margin(4)
-        .split(area);
-
-    let host_style = if app.active_field == 0 { Style::default().fg(ACCENT) } else { Style::default().fg(MUTED) };
-    let user_style = if app.active_field == 1 { Style::default().fg(ACCENT) } else { Style::default().fg(MUTED) };
-
-    let host_block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-        .border_style(host_style).title(Span::styled(" Destination host ", host_style));
-    f.render_widget(Paragraph::new(app.host_input.as_str()).block(host_block).style(Style::default().fg(TITLE)), chunks[1]);
-    if app.active_field == 0 {
-        f.set_cursor_position((chunks[1].x + 1 + app.host_input.len() as u16, chunks[1].y + 1));
-    }
-
-    let user_block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-        .border_style(user_style).title(Span::styled(" SSH user ", user_style));
-    f.render_widget(Paragraph::new(app.user_input.as_str()).block(user_block).style(Style::default().fg(TITLE)), chunks[2]);
-    if app.active_field == 1 {
-        f.set_cursor_position((chunks[2].x + 1 + app.user_input.len() as u16, chunks[2].y + 1));
-    }
-
-    // Verify status.
-    let status_widget = if app.verifying && app.worker.as_ref().map(|w| !w.lock().unwrap().done).unwrap_or(true) {
-        Paragraph::new("⟳ Verifying SSH + FusionPBX access…")
-            .style(Style::default().fg(Color::Yellow))
+fn draw_server_screen(f: &mut Frame, app: &App, area: Rect) {
+    let status = if app.verifying {
+        VerifyStatus::InProgress
     } else if let Some(Ok(v)) = &app.verify_result {
-        let color = if v.is_ok() { OK } else { ERR };
-        Paragraph::new(v.summary()).style(Style::default().fg(color))
+        if v.is_ok() { VerifyStatus::Ok(v.summary()) } else { VerifyStatus::Err(v.summary()) }
     } else if let Some(Err(e)) = &app.verify_result {
-        Paragraph::new(format!("✗ {}", e)).style(Style::default().fg(ERR))
+        VerifyStatus::Err(format!("✗ {}", e))
     } else {
-        Paragraph::new("Press Enter to verify").style(Style::default().fg(MUTED))
+        VerifyStatus::Idle
     };
-
-    f.render_widget(status_widget, chunks[4]);
+    draw_server(f, area, ServerInputs {
+        host: &app.host_input,
+        user: &app.user_input,
+        active_field: app.active_field,
+        host_label: " Destination host ",
+        status,
+        accent: ACCENT,
+    });
 }
 
 fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // dest domain field
-            Constraint::Min(0),    // details + confirm
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
         .margin(4)
         .split(area);
 
-    // --- Destination domain editable field ---
     let single_bundle = app.selected_bundles().len() == 1
         || (app.selected_bundles().is_empty() && app.selected_manifest.is_some());
     let field_style = if single_bundle && app.confirm_field == 0 {
@@ -265,38 +231,27 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(field_style)
         .title(Span::styled(" Destination domain name ", field_style));
-    let domain_display = if single_bundle {
-        app.dest_domain_input.as_str()
-    } else {
-        "(multiple — rename not available)"
-    };
+    let domain_display = if single_bundle { app.dest_domain_input.as_str() } else { "(multiple — rename not available)" };
     f.render_widget(
         Paragraph::new(domain_display).block(domain_block).style(Style::default().fg(TITLE)),
         chunks[0],
     );
     if single_bundle && app.confirm_field == 0 {
-        f.set_cursor_position((
-            chunks[0].x + 1 + app.dest_domain_input.len() as u16,
-            chunks[0].y + 1,
-        ));
+        f.set_cursor_position((chunks[0].x + 1 + app.dest_domain_input.len() as u16, chunks[0].y + 1));
     }
 
-    // --- Details + confirmation prompt ---
     let mut lines = vec![
         Line::from(Span::styled("Confirm restore", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))),
         Line::from(""),
     ];
     let selected = app.selected_bundles();
     if selected.len() == 1 {
-        let src_name = selected[0].1.domain.domain_name.clone();
         lines.push(Line::from(vec![
             Span::styled("Source domain: ", Style::default().fg(MUTED)),
-            Span::styled(src_name, Style::default().fg(TITLE)),
+            Span::styled(selected[0].1.domain.domain_name.clone(), Style::default().fg(TITLE)),
         ]));
     } else if !selected.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled(format!("Domains ({}):", selected.len()), Style::default().fg(MUTED)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(format!("Domains ({}):", selected.len()), Style::default().fg(MUTED))]));
         for (_, m) in &selected {
             lines.push(Line::from(vec![
                 Span::styled("  • ", Style::default().fg(MUTED)),
@@ -315,7 +270,6 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     ]));
     lines.push(Line::from(""));
 
-    // Version / compatibility info.
     let src_versions: Vec<_> = {
         let selected = app.selected_bundles();
         if !selected.is_empty() {
@@ -352,22 +306,15 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
             }
         }
     } else {
-        lines.push(Line::from(Span::styled(
-            "Destination version not yet detected",
-            Style::default().fg(MUTED),
-        )));
+        lines.push(Line::from(Span::styled("Destination version not yet detected", Style::default().fg(MUTED))));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "This will import database records and files into the destination server.",
         Style::default().fg(Color::Yellow),
     )));
-    lines.push(Line::from(Span::styled(
-        "The source server is NOT modified.",
-        Style::default().fg(OK),
-    )));
+    lines.push(Line::from(Span::styled("The source server is NOT modified.", Style::default().fg(OK))));
     lines.push(Line::from(""));
-
     if app.confirm_field == 0 {
         lines.push(Line::from(Span::styled(
             "Edit domain name above, then press Enter/Tab to continue.",
@@ -381,58 +328,12 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let border_color = if app.confirm_field == 1 { Color::Yellow } else { MUTED };
-    let p = Paragraph::new(Text::from(lines))
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(border_color)))
-        .wrap(Wrap { trim: false });
-    f.render_widget(p, chunks[1]);
-}
-
-fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(3), Constraint::Min(0)])
-        .margin(2)
-        .split(area);
-
-    let (log, progress, current_task) = if let Some(w) = &app.worker {
-        let w = w.lock().unwrap();
-        (w.log.clone(), w.progress, w.current_task.clone())
-    } else {
-        (vec![], 0.0, String::new())
-    };
-
     f.render_widget(
-        Paragraph::new(current_task)
-            .style(Style::default().fg(ACCENT))
-            .block(Block::default().borders(Borders::NONE)
-                .title(Span::styled(" Current task ", Style::default().fg(MUTED)))),
-        chunks[0],
-    );
-    f.render_widget(
-        Gauge::default()
-            .block(Block::default().borders(Borders::NONE))
-            .gauge_style(Style::default().fg(ACCENT).bg(Color::DarkGray))
-            .ratio(progress)
-            .label(format!("{:.0}%", progress * 100.0)),
+        Paragraph::new(Text::from(lines))
+            .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color)))
+            .wrap(Wrap { trim: false }),
         chunks[1],
-    );
-
-    let log_height = chunks[2].height.saturating_sub(2) as usize;
-    let visible: Vec<ListItem> = log.iter().rev().take(log_height).rev()
-        .map(|line| {
-            let style = if line.starts_with('✓') { Style::default().fg(OK) }
-                else if line.starts_with('✗') { Style::default().fg(ERR) }
-                else { Style::default().fg(MUTED) };
-            ListItem::new(Span::styled(format!(" {}", line), style))
-        })
-        .collect();
-
-    f.render_widget(
-        List::new(visible).block(Block::default().borders(Borders::ALL)
-            .border_type(BorderType::Rounded).border_style(Style::default().fg(MUTED))
-            .title(Span::styled(" Log ", Style::default().fg(MUTED)))),
-        chunks[2],
     );
 }
 
@@ -444,59 +345,24 @@ fn draw_done(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     let n = app.selected_bundles().len().max(1);
-    let heading = if n == 1 {
-        "✓ Restore complete".to_string()
-    } else {
-        format!("✓ Restore complete ({} domains)", n)
-    };
+    let heading = if n == 1 { "✓ Restore complete".to_string() } else { format!("✓ Restore complete ({} domains)", n) };
     let body = if n == 1 {
         "Domain has been restored to the destination server.".to_string()
     } else {
         format!("{} domains have been restored to the destination server.", n)
     };
 
-    let lines = vec![
-        Line::from(Span::styled(heading, Style::default().fg(OK).add_modifier(Modifier::BOLD))),
-        Line::from(""),
-        Line::from(Span::styled(body, Style::default().fg(TITLE))),
-        Line::from(""),
-        Line::from(Span::styled("Press Enter or q to exit.", Style::default().fg(MUTED))),
-    ];
-
-    let p = Paragraph::new(Text::from(lines))
+    f.render_widget(
+        Paragraph::new(Text::from(vec![
+            Line::from(Span::styled(heading, Style::default().fg(OK).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(Span::styled(body, Style::default().fg(TITLE))),
+            Line::from(""),
+            Line::from(Span::styled("Press Enter or q to exit.", Style::default().fg(MUTED))),
+        ]))
         .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
             .border_style(Style::default().fg(OK)))
-        .wrap(Wrap { trim: false });
-    f.render_widget(p, chunks[1]);
-}
-
-fn draw_error(f: &mut Frame, msg: String, area: Rect) {
-    let popup = centered_rect(60, 30, area);
-    f.render_widget(Clear, popup);
-    let p = Paragraph::new(msg)
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ERR))
-            .title(Span::styled(" Error ", Style::default().fg(ERR).add_modifier(Modifier::BOLD))))
-        .style(Style::default().fg(ERR))
-        .wrap(Wrap { trim: true });
-    f.render_widget(p, popup);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(layout[1])[1]
+        .wrap(Wrap { trim: false }),
+        chunks[1],
+    );
 }

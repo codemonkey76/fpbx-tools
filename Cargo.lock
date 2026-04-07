@@ -529,6 +529,7 @@ dependencies = [
  "dirs",
  "flate2",
  "fpbx-core",
+ "fpbx-tui-shared",
  "ratatui",
  "serde",
  "serde_json",
@@ -575,6 +576,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "fpbx-core",
+ "fpbx-tui-shared",
  "ratatui",
  "serde",
  "serde_json",
@@ -592,10 +594,23 @@ dependencies = [
  "crossterm",
  "dirs",
  "fpbx-core",
+ "fpbx-tui-shared",
  "ratatui",
  "serde",
  "serde_json",
  "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fpbx-tui-shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "dirs",
+ "fpbx-core",
+ "ratatui",
  "tracing-subscriber",
 ]
 

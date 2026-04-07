@@ -3,7 +3,7 @@ use ssh2::Session;
 use std::{
     io::Read,
     net::TcpStream,
-    path::{Path, PathBuf},
+    path::Path,
     time::Duration,
 };
 use tracing::{debug, info};
@@ -124,7 +124,7 @@ impl SshSession {
     }
 
     /// Upload a local file to a remote path via SFTP.
-    pub fn upload(&self, local: &Path, remote: &Path, _mode: i32) -> Result<u64> {
+    pub fn upload(&self, local: &Path, remote: &Path) -> Result<u64> {
         debug!("upload {:?} -> {:?}", local, remote);
         let sftp = self.session.sftp().context("open sftp")?;
         let mut remote_file = sftp
@@ -211,14 +211,78 @@ impl VerifyResult {
     }
 }
 
-/// Helper: build a remote temp dir, run work, then clean up.
-pub fn with_remote_tempdir<F>(session: &SshSession, prefix: &str, f: F) -> Result<()>
-where
-    F: FnOnce(&Path) -> Result<()>,
-{
-    let out = session.exec_ok(&format!("mktemp -d /tmp/{}-XXXXXX", prefix))?;
-    let tmp = PathBuf::from(out.trim());
-    let result = f(&tmp);
-    let _ = session.exec(&format!("rm -rf {:?}", tmp));
-    result
+// ── SSH config helpers ──────────────────────────────────────────────────────
+
+/// A single entry parsed from `~/.ssh/config`.
+#[derive(Debug, Clone)]
+pub struct SshHostEntry {
+    pub hostname: String,
+    pub user: String,
+}
+
+/// Parse `~/.ssh/config` and return a map of `alias → SshHostEntry`.
+/// Wildcard entries (`Host *`) are ignored.
+pub fn parse_ssh_config() -> std::collections::HashMap<String, SshHostEntry> {
+    use std::collections::HashMap;
+    let mut map = HashMap::new();
+    let config_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".ssh")
+        .join("config");
+    let Ok(content) = std::fs::read_to_string(&config_path) else {
+        return map;
+    };
+    let mut current_alias: Option<String> = None;
+    let mut current_hostname: Option<String> = None;
+    let mut current_user: Option<String> = None;
+
+    let flush = |map: &mut HashMap<String, SshHostEntry>,
+                 alias: &mut Option<String>,
+                 hostname: &mut Option<String>,
+                 user: &mut Option<String>| {
+        if let (Some(a), Some(h), Some(u)) = (alias.take(), hostname.take(), user.take()) {
+            map.insert(a.to_lowercase(), SshHostEntry { hostname: h, user: u });
+        }
+    };
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, val) = match line.split_once(|c: char| c.is_whitespace()) {
+            Some(pair) => (pair.0.to_lowercase(), pair.1.trim().to_string()),
+            None => continue,
+        };
+        match key.as_str() {
+            "host" => {
+                flush(&mut map, &mut current_alias, &mut current_hostname, &mut current_user);
+                if !val.contains('*') {
+                    current_alias = Some(val);
+                }
+            }
+            "hostname" => current_hostname = Some(val),
+            "user" => current_user = Some(val),
+            _ => {}
+        }
+    }
+    flush(&mut map, &mut current_alias, &mut current_hostname, &mut current_user);
+    map
+}
+
+/// Return the current OS user (falls back to `"root"`).
+pub fn whoami_current_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "root".to_string())
+}
+
+/// Resolve a host alias against a parsed SSH config map.
+/// Returns the `HostName` value if the alias is found, otherwise returns `input` trimmed.
+pub fn resolve_host(input: &str, hosts: &std::collections::HashMap<String, SshHostEntry>) -> String {
+    let key = input.trim().to_lowercase();
+    hosts
+        .get(&key)
+        .map(|e| e.hostname.clone())
+        .unwrap_or_else(|| input.trim().to_string())
 }

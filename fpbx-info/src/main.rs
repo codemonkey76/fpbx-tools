@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
-use fpbx_core::bundle::{BUNDLE_EXT, default_backup_dir, open_bundle};
+use fpbx_core::bundle::{default_backup_dir, fmt_bytes, list_bundles as core_list_bundles, open_bundle};
 use std::{env, fs, path::PathBuf};
 
 fn main() -> Result<()> {
@@ -19,27 +19,12 @@ fn list_bundles() -> Result<()> {
         return Ok(());
     }
 
-    let mut entries: Vec<(PathBuf, fpbx_core::bundle::BundleManifest)> = Vec::new();
-    for entry in fs::read_dir(&dir).context("read backup dir")? {
-        let path = entry?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some(BUNDLE_EXT) {
-            continue;
-        }
-        let staging =
-            std::env::temp_dir().join(path.file_stem().and_then(|s| s.to_str()).unwrap_or("fpbx"));
-        if let Ok(manifest) = open_bundle(&path, &staging) {
-            entries.push((path, manifest));
-            let _ = fs::remove_dir_all(&staging);
-        }
-    }
+    let entries = core_list_bundles(&dir).context("read backup dir")?;
 
     if entries.is_empty() {
         println!("{}", "No .fpbx bundles found.".yellow());
         return Ok(());
     }
-
-    // Sort newest first.
-    entries.sort_by(|a, b| b.1.created_at.cmp(&a.1.created_at));
 
     println!("\n{}/", dir.display().to_string().dimmed());
     println!();
@@ -186,20 +171,4 @@ fn show_bundle(path: PathBuf) -> Result<()> {
 
     let _ = fs::remove_dir_all(&staging);
     Ok(())
-}
-
-fn fmt_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
-    let mut val = bytes as f64;
-    let mut unit_idx = 0;
-    while val >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        val /= 1024.0;
-        unit_idx += 1;
-    }
-
-    if unit_idx == 0 {
-        format!("{} B", bytes)
-    } else {
-        format!("{:.1} {}", val, UNITS[unit_idx])
-    }
 }

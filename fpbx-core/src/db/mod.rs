@@ -3,7 +3,7 @@ mod export;
 mod import;
 mod uuid_remap;
 
-pub use export::{export_domain_sql, export_domain_sql_v2};
+pub use export::export_domain_sql;
 pub use import::import_domain_sql;
 
 /// Describe a domain rename to apply during restore.

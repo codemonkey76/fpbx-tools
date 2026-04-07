@@ -1,17 +1,12 @@
 [package]
-name = "fpbx-routes-xfer"
+name = "fpbx-tui-shared"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 fpbx-core = { version = "0.1.0", path = "../fpbx-core" }
-fpbx-tui-shared = { version = "0.1.0", path = "../fpbx-tui-shared" }
 anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-chrono.workspace = true
-ratatui.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
-tracing.workspace = true
+ratatui.workspace = true
 tracing-subscriber.workspace = true

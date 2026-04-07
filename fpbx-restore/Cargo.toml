@@ -9,6 +9,7 @@ chrono.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
 fpbx-core = { version = "0.1.0", path = "../fpbx-core" }
+fpbx-tui-shared = { version = "0.1.0", path = "../fpbx-tui-shared" }
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true

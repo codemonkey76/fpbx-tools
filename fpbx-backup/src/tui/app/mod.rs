@@ -1,5 +1,4 @@
 mod handlers;
-mod ssh_config;
 mod workers;
 
 pub mod types;
@@ -7,8 +6,8 @@ pub mod types;
 pub use types::{App, AppScreen};
 
 use anyhow::Result;
-use fpbx_core::{bundle::default_backup_dir, domain::FpbxDomain};
-use ssh_config::parse_ssh_config;
+use fpbx_core::{bundle::default_backup_dir, domain::FpbxDomain, parse_ssh_config, resolve_host};
+use fpbx_tui_shared::TuiApp;
 
 /// Convenience alias used by advance_to_domains and the slot pattern.
 pub(super) type DomainResult = Option<Result<Vec<FpbxDomain>, String>>;
@@ -72,13 +71,8 @@ impl App {
             .collect()
     }
 
-    /// Resolved hostname — uses HostName from ssh config if available, else raw input.
     pub fn resolved_host(&self) -> String {
-        let key = self.host_input.trim().to_lowercase();
-        self.ssh_hosts
-            .get(&key)
-            .map(|e| e.hostname.clone())
-            .unwrap_or_else(|| self.host_input.trim().to_string())
+        resolve_host(&self.host_input, &self.ssh_hosts)
     }
 
     /// Called every ~100ms tick.
@@ -115,4 +109,12 @@ impl App {
             }
         }
     }
+}
+
+impl TuiApp for App {
+    fn handle_key(&mut self, key: crossterm::event::KeyEvent) { self.handle_key(key); }
+    fn tick(&mut self) { self.tick(); }
+    fn is_running_task(&self) -> bool { self.is_running_task() }
+    fn is_typing(&self) -> bool { self.is_typing() }
+    fn should_quit(&self) -> bool { self.should_quit }
 }
