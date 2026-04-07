@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use fpbx_core::bundle::{default_backup_dir, default_staging_dir, list_bundles, open_bundle, BundleManifest, DB_DUMP_NAME, FILES_TAR_NAME};
-use fpbx_core::db::import_domain_sql;
+use fpbx_core::db::{import_domain_sql, DomainRename};
 use fpbx_core::ssh::{SshSession, VerifyResult};
 use fpbx_core::version::{check_compat, FpbxVersion};
 use std::collections::{HashMap, HashSet};
@@ -63,6 +63,10 @@ pub struct App {
     // Detected destination version (populated after successful verify).
     pub dest_version: Option<FpbxVersion>,
 
+    // Confirm screen — destination domain name (editable, single-bundle only).
+    pub dest_domain_input: String,
+    pub confirm_field: usize, // 0 = editing dest domain, 1 = ready to confirm
+
     // Progress.
     pub worker: Option<Arc<Mutex<WorkerState>>>,
 }
@@ -91,6 +95,8 @@ impl App {
             verify_result: None,
             verifying: false,
             dest_version: None,
+            dest_domain_input: String::new(),
+            confirm_field: 0,
             worker: None,
         }
     }
@@ -106,6 +112,7 @@ impl App {
 
     pub fn is_typing(&self) -> bool {
         self.screen == AppScreen::Server
+            || (self.screen == AppScreen::Confirm && self.confirm_field == 0)
     }
 
     pub fn selected_bundles(&self) -> Vec<&(PathBuf, BundleManifest)> {
@@ -223,6 +230,8 @@ impl App {
             }
             KeyCode::Enter => {
                 if !self.selected_bundle_paths.is_empty() {
+                    self.active_field = 0;
+                    self.verify_result = None;
                     self.screen = AppScreen::Server;
                 } else if let Some(i) = self.bundle_list_state.selected() {
                     if let Some((path, manifest)) = self.bundles.get(i) {
@@ -239,7 +248,11 @@ impl App {
 
     fn handle_preview_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Enter => self.screen = AppScreen::Server,
+            KeyCode::Enter => {
+                self.active_field = 0;
+                self.verify_result = None;
+                self.screen = AppScreen::Server;
+            }
             KeyCode::Esc => self.screen = AppScreen::BundlePicker,
             _ => {}
         }
@@ -272,6 +285,13 @@ impl App {
                 }
                 // Already verified OK — advance to Confirm.
                 if matches!(&self.verify_result, Some(Ok(v)) if v.is_ok()) {
+                    // Pre-populate dest domain from the single selected bundle (if any).
+                    let src_name = self.selected_bundles().first()
+                        .map(|(_, m)| m.domain.domain_name.clone())
+                        .or_else(|| self.selected_manifest.as_ref().map(|m| m.domain.domain_name.clone()))
+                        .unwrap_or_default();
+                    self.dest_domain_input = src_name;
+                    self.confirm_field = 0;
                     self.screen = AppScreen::Confirm;
                     return;
                 }
@@ -334,21 +354,52 @@ impl App {
     }
 
     fn handle_confirm_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Enter => {
-                self.start_restore_worker();
+        if self.confirm_field == 0 {
+            // Editing destination domain name.
+            match key.code {
+                KeyCode::Char(c) => { self.dest_domain_input.push(c); }
+                KeyCode::Backspace => { self.dest_domain_input.pop(); }
+                KeyCode::Enter | KeyCode::Tab => { self.confirm_field = 1; }
+                KeyCode::Esc => self.screen = AppScreen::Server,
+                _ => {}
             }
-            KeyCode::Char('n') | KeyCode::Esc => self.screen = AppScreen::Server,
-            _ => {}
+        } else {
+            // Ready to confirm.
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    self.start_restore_worker();
+                }
+                KeyCode::Tab | KeyCode::Char('e') => { self.confirm_field = 0; }
+                KeyCode::Char('n') | KeyCode::Esc => self.screen = AppScreen::Server,
+                _ => {}
+            }
         }
     }
 
     fn start_restore_worker(&mut self) {
         let host = self.resolved_host();
         let user = self.user_input.trim().to_string();
-        let bundles: Vec<std::path::PathBuf> =
-            self.selected_bundle_paths.iter().cloned().collect();
         let dest_version = self.dest_version.clone();
+
+        // Build list of (bundle_path, optional DomainRename).
+        // Rename is only applied for single-bundle restores.
+        let bundles_with_rename: Vec<(std::path::PathBuf, Option<DomainRename>)> = {
+            let selected = self.selected_bundles();
+            if selected.is_empty() {
+                // Single bundle from Preview flow.
+                let path = self.selected_bundle_path.clone().unwrap();
+                let manifest = self.selected_manifest.as_ref().unwrap();
+                let rename = build_rename(manifest, &self.dest_domain_input);
+                vec![(path, rename)]
+            } else if selected.len() == 1 {
+                let (path, manifest) = selected[0];
+                let rename = build_rename(manifest, &self.dest_domain_input);
+                vec![(path.clone(), rename)]
+            } else {
+                // Multi-bundle: no renaming.
+                selected.iter().map(|(p, _)| ((*p).clone(), None)).collect()
+            }
+        };
 
         let wstate = Arc::new(Mutex::new(WorkerState::default()));
         let wstate2 = wstate.clone();
@@ -356,8 +407,8 @@ impl App {
         self.screen = AppScreen::Progress;
 
         thread::spawn(move || {
-            let n = bundles.len();
-            for (idx, bundle_path) in bundles.into_iter().enumerate() {
+            let n = bundles_with_rename.len();
+            for (idx, (bundle_path, rename)) in bundles_with_rename.into_iter().enumerate() {
                 {
                     let mut w = wstate2.lock().unwrap();
                     w.progress = idx as f64 / n as f64;
@@ -377,7 +428,7 @@ impl App {
                     w.current_task = msg.to_string();
                 };
 
-                match run_restore(host.clone(), user.clone(), bundle_path, dest_version.clone(), &mut progress) {
+                match run_restore(host.clone(), user.clone(), bundle_path, dest_version.clone(), rename.as_ref(), &mut progress) {
                     Ok(()) => {
                         let mut w = wstate2.lock().unwrap();
                         w.log.push("✓ Restore complete".to_string());
@@ -398,11 +449,26 @@ impl App {
     }
 }
 
+fn build_rename(manifest: &fpbx_core::bundle::BundleManifest, dest_name: &str) -> Option<DomainRename> {
+    let dest_name = dest_name.trim();
+    if dest_name.is_empty() || dest_name == manifest.domain.domain_name {
+        return None;
+    }
+    let new_uuid = uuid::Uuid::new_v4().to_string();
+    Some(DomainRename {
+        src_uuid: manifest.domain.domain_uuid.clone(),
+        src_name: manifest.domain.domain_name.clone(),
+        dest_uuid: new_uuid,
+        dest_name: dest_name.to_string(),
+    })
+}
+
 fn run_restore(
     host: String,
     user: String,
     bundle_path: std::path::PathBuf,
     dest_version: Option<FpbxVersion>,
+    rename: Option<&DomainRename>,
     progress: &mut dyn FnMut(&str),
 ) -> anyhow::Result<()> {
     let stem = bundle_path
@@ -430,7 +496,7 @@ fn run_restore(
     let session = SshSession::connect(&host, &user)?;
 
     let sql_path = staging.join(DB_DUMP_NAME);
-    import_domain_sql(&session, &sql_path, progress)?;
+    import_domain_sql(&session, &sql_path, rename, progress)?;
 
     let files_tar = staging.join(FILES_TAR_NAME);
     if files_tar.exists() && files_tar.metadata().map(|m| m.len()).unwrap_or(0) > 100 {

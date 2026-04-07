@@ -77,7 +77,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         AppScreen::BundlePicker => " ↑↓/jk navigate   Space toggle   a select all   Enter continue   q quit",
         AppScreen::Preview => " Enter continue   Esc back",
         AppScreen::Server => " Tab switch field   Enter verify/continue   Esc back",
-        AppScreen::Confirm => " y/Enter confirm   n/Esc cancel",
+        AppScreen::Confirm => if app.confirm_field == 0 {
+            " Tab/Enter focus confirm   Esc back"
+        } else {
+            " y/Enter confirm   Tab/e edit domain   n/Esc cancel"
+        },
         AppScreen::Progress => " (restoring…)",
         AppScreen::Done => " Enter/q quit",
         AppScreen::Error(_) => " Esc dismiss",
@@ -241,19 +245,53 @@ fn draw_server(f: &mut Frame, app: &App, area: Rect) {
 fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3), // dest domain field
+            Constraint::Min(0),    // details + confirm
+        ])
         .margin(4)
         .split(area);
 
+    // --- Destination domain editable field ---
+    let single_bundle = app.selected_bundles().len() == 1
+        || (app.selected_bundles().is_empty() && app.selected_manifest.is_some());
+    let field_style = if single_bundle && app.confirm_field == 0 {
+        Style::default().fg(ACCENT)
+    } else {
+        Style::default().fg(MUTED)
+    };
+    let domain_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(field_style)
+        .title(Span::styled(" Destination domain name ", field_style));
+    let domain_display = if single_bundle {
+        app.dest_domain_input.as_str()
+    } else {
+        "(multiple — rename not available)"
+    };
+    f.render_widget(
+        Paragraph::new(domain_display).block(domain_block).style(Style::default().fg(TITLE)),
+        chunks[0],
+    );
+    if single_bundle && app.confirm_field == 0 {
+        f.set_cursor_position((
+            chunks[0].x + 1 + app.dest_domain_input.len() as u16,
+            chunks[0].y + 1,
+        ));
+    }
+
+    // --- Details + confirmation prompt ---
     let mut lines = vec![
         Line::from(Span::styled("Confirm restore", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))),
         Line::from(""),
     ];
     let selected = app.selected_bundles();
     if selected.len() == 1 {
+        let src_name = selected[0].1.domain.domain_name.clone();
         lines.push(Line::from(vec![
-            Span::styled("Domain:       ", Style::default().fg(MUTED)),
-            Span::styled(selected[0].1.domain.domain_name.clone(), Style::default().fg(TITLE)),
+            Span::styled("Source domain: ", Style::default().fg(MUTED)),
+            Span::styled(src_name, Style::default().fg(TITLE)),
         ]));
     } else if !selected.is_empty() {
         lines.push(Line::from(vec![
@@ -267,12 +305,12 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
         }
     } else if let Some(m) = &app.selected_manifest {
         lines.push(Line::from(vec![
-            Span::styled("Domain:       ", Style::default().fg(MUTED)),
+            Span::styled("Source domain: ", Style::default().fg(MUTED)),
             Span::styled(m.domain.domain_name.clone(), Style::default().fg(TITLE)),
         ]));
     }
     lines.push(Line::from(vec![
-        Span::styled("Destination:  ", Style::default().fg(MUTED)),
+        Span::styled("Destination:   ", Style::default().fg(MUTED)),
         Span::styled(format!("{}@{}", app.user_input, app.host_input), Style::default().fg(TITLE)),
     ]));
     lines.push(Line::from(""));
@@ -290,7 +328,7 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     };
     if let Some(dst_v) = &app.dest_version {
         lines.push(Line::from(vec![
-            Span::styled("Destination:  ", Style::default().fg(MUTED)),
+            Span::styled("Destination:   ", Style::default().fg(MUTED)),
             Span::styled(dst_v.label(), Style::default().fg(TITLE)),
         ]));
         if src_versions.is_empty() {
@@ -307,7 +345,7 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
                     VersionCompat::Unsupported { .. } => (compat.status_line(), ERR),
                 };
                 lines.push(Line::from(vec![
-                    Span::styled("Source:       ", Style::default().fg(MUTED)),
+                    Span::styled("Source:        ", Style::default().fg(MUTED)),
                     Span::styled(src_v.label(), Style::default().fg(TITLE)),
                 ]));
                 lines.push(Line::from(Span::styled(label, Style::default().fg(color))));
@@ -329,16 +367,25 @@ fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(OK),
     )));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Press y or Enter to proceed, n or Esc to cancel.",
-        Style::default().fg(ACCENT),
-    )));
 
+    if app.confirm_field == 0 {
+        lines.push(Line::from(Span::styled(
+            "Edit domain name above, then press Enter/Tab to continue.",
+            Style::default().fg(ACCENT),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Press y or Enter to proceed, Tab/e to edit domain, n/Esc to cancel.",
+            Style::default().fg(ACCENT),
+        )));
+    }
+
+    let border_color = if app.confirm_field == 1 { Color::Yellow } else { MUTED };
     let p = Paragraph::new(Text::from(lines))
         .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Yellow)))
+            .border_style(Style::default().fg(border_color)))
         .wrap(Wrap { trim: false });
-    f.render_widget(p, chunks[0]);
+    f.render_widget(p, chunks[1]);
 }
 
 fn draw_progress(f: &mut Frame, app: &App, area: Rect) {
