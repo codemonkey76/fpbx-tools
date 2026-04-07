@@ -36,11 +36,16 @@ impl FpbxVersion {
         let s = self
             .freeswitch
             .split_whitespace()
-            .find(|t| t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
+            .find(|t| {
+                t.chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+            })
             .unwrap_or(self.freeswitch.as_str());
         // strip anything after first non-version char (-, +, ~)
         let end = s
-            .find(|c: char| c == '-' || c == '+' || c == '~')
+            .find(|c: char| ['-', '+', '~'].contains(&c))
             .unwrap_or(s.len());
         &s[..end]
     }
@@ -97,16 +102,16 @@ pub fn check_compat(src: &FpbxVersion, dst: &FpbxVersion) -> VersionCompat {
     }
 
     // Block if FreeSwitch major version differs (1.x → 2.x would be a huge jump).
-    if let (Some((sm, _)), Some((dm, _))) = (src.major_minor(), dst.major_minor()) {
-        if sm != dm {
-            return VersionCompat::Unsupported {
-                reason: format!(
-                    "FreeSwitch major version mismatch ({} → {}); cross-generation restore not supported",
-                    src.freeswitch_short(),
-                    dst.freeswitch_short()
-                ),
-            };
-        }
+    if let (Some((sm, _)), Some((dm, _))) = (src.major_minor(), dst.major_minor())
+        && sm != dm
+    {
+        return VersionCompat::Unsupported {
+            reason: format!(
+                "FreeSwitch major version mismatch ({} → {}); cross-generation restore not supported",
+                src.freeswitch_short(),
+                dst.freeswitch_short()
+            ),
+        };
     }
 
     // Same major (or unknown) — allow with column intersection.
@@ -131,7 +136,8 @@ pub fn detect_version(session: &SshSession) -> Result<FpbxVersion> {
         .map(|l| l.trim().to_string())
         .unwrap_or_else(|| fs_raw.trim().to_string());
 
-    let schema_fingerprint = compute_schema_fingerprint(session).unwrap_or_else(|_| "unknown".into());
+    let schema_fingerprint =
+        compute_schema_fingerprint(session).unwrap_or_else(|_| "unknown".into());
 
     Ok(FpbxVersion {
         freeswitch,

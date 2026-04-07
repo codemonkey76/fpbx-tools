@@ -39,17 +39,17 @@ fn main() -> Result<()> {
     loop {
         terminal.draw(|f| tui::ui::draw(f, &mut app))?;
         let timeout = tick.saturating_sub(last_tick.elapsed());
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q')
-                    && key.modifiers == KeyModifiers::NONE
-                    && !app.is_running_task()
-                    && !app.is_typing()
-                {
-                    break;
-                }
-                app.handle_key(key);
+        if event::poll(timeout)?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.code == KeyCode::Char('q')
+                && key.modifiers == KeyModifiers::NONE
+                && !app.is_running_task()
+                && !app.is_typing()
+            {
+                break;
             }
+            app.handle_key(key);
         }
 
         if last_tick.elapsed() >= tick {
